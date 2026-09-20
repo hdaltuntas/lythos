@@ -249,28 +249,68 @@ class BeamElements:
 
 @dataclass
 class InterfaceProperties:
-    """Mohr-Coulomb contact between a structure and the soil."""
+    """Mohr-Coulomb contact between a structure and the soil.
 
-    kn: float = 1.0e6      # normal stiffness [kN/m3]
-    ks: float = 1.0e5      # shear stiffness [kN/m3]
-    c: float = 0.0         # adhesion [kPa]
-    phi: float = 20.0      # interface friction angle [deg]
-    tensile: float = 0.0   # tensile capacity [kPa]
+    Leaving a value as ``None`` means "derive it from the adjacent soil":
+    strength from the structure's ``r_inter``, stiffness from the soil moduli
+    and a virtual interface thickness.  That is what an engineer expects from
+    an interface they have not tuned by hand, and it keeps the contact stiff
+    enough to be realistic without wrecking the conditioning of the system.
+    """
+
+    kn: float | None = None      # normal stiffness [kN/m3]
+    ks: float | None = None      # shear stiffness [kN/m3]
+    c: float | None = None       # adhesion [kPa]
+    phi: float | None = None     # interface friction angle [deg]
+    tensile: float = 0.0         # tensile capacity [kPa]
+    #: interface thickness as a fraction of the local element size
+    virtual_thickness: float = 0.1
 
 
 class InterfaceElements:
-    """Zero-thickness quadratic interface elements (three node pairs)."""
+    """Zero-thickness quadratic interface elements (three node pairs).
 
-    def __init__(self, nodes: np.ndarray, pairs: list[tuple[tuple[int, int, int], tuple[int, int, int]]],
-                 props: InterfaceProperties):
+    The contact is elasto-plastic and incremental: tractions are carried
+    forward from the last converged state and updated by the change in
+    relative displacement, so unloading after slip recovers elastically
+    instead of retracing the loading curve.  A total-displacement form is much
+    simpler, but it makes the tangent inconsistent as soon as any point on the
+    wall unloads, and the global iteration then stalls short of equilibrium.
+    """
+
+    def __init__(self, nodes: np.ndarray, pairs, props: InterfaceProperties):
         self.nodes = nodes
         self.props = props
         self.pairs = pairs
-        self.state = np.zeros((len(pairs), 2, 2))   # per element, per Gauss point: (tn, ts)
+        n = len(pairs)
+        # per element, per Gauss point: [gap, slip, normal traction, shear traction]
+        self.committed = np.zeros((n, 2, 4))
+        self.trial = np.zeros((n, 2, 4))
 
     @property
     def n_elements(self) -> int:
         return len(self.pairs)
+
+    def commit(self) -> None:
+        self.committed = self.trial.copy()
+
+    def snapshot(self) -> np.ndarray:
+        return self.committed.copy()
+
+    def restore(self, state: np.ndarray) -> None:
+        self.committed = state.copy()
+        self.trial = state.copy()
+
+    def tractions(self):
+        """Normal and shear traction at each Gauss point, and its position."""
+        out = []
+        for e, (a, _b) in enumerate(self.pairs):
+            xy = self.nodes[list(a)]
+            for g, (xi, _w) in enumerate(LINE_GAUSS_2):
+                point = line3_shape(xi)[0] @ xy
+                out.append((point[0], point[1], self.committed[e, g, 2],
+                            self.committed[e, g, 3]))
+        return np.array(out) if out else np.zeros((0, 4))
 
     def dofs(self) -> np.ndarray:
         d = np.zeros((self.n_elements, 12), dtype=np.int64)
@@ -282,62 +322,81 @@ class InterfaceElements:
                 d[e, 6 + 2 * i + 1] = 2 * b[i] + 1
         return d
 
+    def _operators(self, e: int, xi: float):
+        """Relative-displacement operators and the Jacobian at one Gauss point."""
+        xy = self.nodes[list(self.pairs[e][0])]
+        N, dN = line3_shape(xi)
+        dxy = dN @ xy
+        jac = float(np.hypot(dxy[0], dxy[1]))
+        t = dxy / jac
+        n = np.array([-t[1], t[0]])
+        Bn = np.zeros(12)
+        Bs = np.zeros(12)
+        for i in range(3):
+            Bn[2 * i], Bn[2 * i + 1] = -N[i] * n[0], -N[i] * n[1]
+            Bn[6 + 2 * i], Bn[6 + 2 * i + 1] = N[i] * n[0], N[i] * n[1]
+            Bs[2 * i], Bs[2 * i + 1] = -N[i] * t[0], -N[i] * t[1]
+            Bs[6 + 2 * i], Bs[6 + 2 * i + 1] = N[i] * t[0], N[i] * t[1]
+        return Bn, Bs, jac
+
     def stiffness_and_force(self, u: np.ndarray, rigid: bool = False):
         """Interface forces and stiffness.
 
         ``rigid`` ties the two sides together instead of letting them slip.
         That is what an interface does before its structure is installed: the
-        node pairs exist in the mesh from the start, and without the tie the
-        soil would be split along the future wall line from the very first
-        stage.
+        node pairs exist in the mesh from the first stage, and without the tie
+        the soil would be split along the future wall line from the start.
         """
         ne = self.n_elements
         Ke = np.zeros((ne, 12, 12))
         Fe = np.zeros((ne, 12))
         dofs = self.dofs()
         p = self.props
-        tan_phi = np.tan(np.radians(p.phi))
-        tie = 1.0e3 * max(p.kn, p.ks, 1.0)
+        kn = p.kn or 1.0e6
+        ks = p.ks or 1.0e5
+        cohesion = p.c or 0.0
+        tan_phi = np.tan(np.radians(p.phi or 0.0))
+        tie = 100.0 * max(kn, ks)
+        residual = 1.0e-3
+
         for e in range(ne):
-            a, b = self.pairs[e]
-            xy = self.nodes[list(a)]
             ue = u[dofs[e]]
             k = np.zeros((12, 12))
             fi = np.zeros(12)
             for g, (xi, w) in enumerate(LINE_GAUSS_2):
-                N, dN = line3_shape(xi)
-                dxy = dN @ xy
-                jac = float(np.hypot(dxy[0], dxy[1]))
-                t = dxy / jac
-                n = np.array([-t[1], t[0]])
-                # relative displacement operator (side B minus side A)
-                Bn = np.zeros(12)
-                Bs = np.zeros(12)
-                for i in range(3):
-                    Bn[2 * i], Bn[2 * i + 1] = -N[i] * n[0], -N[i] * n[1]
-                    Bn[6 + 2 * i], Bn[6 + 2 * i + 1] = N[i] * n[0], N[i] * n[1]
-                    Bs[2 * i], Bs[2 * i + 1] = -N[i] * t[0], -N[i] * t[1]
-                    Bs[6 + 2 * i], Bs[6 + 2 * i + 1] = N[i] * t[0], N[i] * t[1]
+                Bn, Bs, jac = self._operators(e, xi)
                 dn = float(Bn @ ue)
                 ds = float(Bs @ ue)
+                coupling = 0.0
                 if rigid:
-                    k += w * jac * tie * (np.outer(Bn, Bn) + np.outer(Bs, Bs))
-                    fi += w * jac * tie * (dn * Bn + ds * Bs)
-                    self.state[e, g] = (tie * dn, tie * ds)
-                    continue
-                tn = p.kn * dn
-                ts = p.ks * ds
-                kn_eff, ks_eff = p.kn, p.ks
-                if tn > p.tensile:                     # gap opens
-                    tn, kn_eff, ks_eff = p.tensile, 1e-6 * p.kn, 1e-6 * p.ks
-                    ts = 0.0
-                tmax = p.c - min(tn, 0.0) * tan_phi if tn < 0 else p.c
-                if abs(ts) > tmax:                     # slip
-                    ts = np.sign(ts) * tmax
-                    ks_eff = 1e-4 * p.ks
+                    tn, ts = tie * dn, tie * ds
+                    kn_eff = ks_eff = tie
+                else:
+                    dn_c, ds_c, tn_c, ts_c = self.committed[e, g]
+                    tn = tn_c + kn * (dn - dn_c)
+                    ts = ts_c + ks * (ds - ds_c)
+                    kn_eff, ks_eff = kn, ks
+                    if tn > p.tensile:                 # the gap has opened
+                        tn, ts = p.tensile, 0.0
+                        kn_eff, ks_eff = residual * kn, residual * ks
+                    else:
+                        tmax = cohesion - tn * tan_phi  # tn <= 0 in contact
+                        if abs(ts) > tmax:              # sliding
+                            sign = float(np.sign(ts))
+                            ts = sign * max(tmax, 0.0)
+                            ks_eff = residual * ks
+                            # While sliding the shear traction is set by the
+                            # normal traction, so the tangent needs the
+                            # coupling term d(tau)/d(sigma_n).  It is far
+                            # larger than the residual shear stiffness, and
+                            # leaving it out stalls the global iteration
+                            # however small the load step.
+                            coupling = -sign * tan_phi * kn
+                self.trial[e, g] = (dn, ds, tn, ts)
                 k += w * jac * (kn_eff * np.outer(Bn, Bn) + ks_eff * np.outer(Bs, Bs))
+                if coupling:
+                    k += w * jac * coupling * np.outer(Bs, Bn)
                 fi += w * jac * (tn * Bn + ts * Bs)
-                self.state[e, g] = (tn, ts)
             Ke[e] = k
             Fe[e] = fi
         return Ke, Fe

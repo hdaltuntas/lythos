@@ -29,6 +29,13 @@ class StructureFE:
     chain: list[int]
     interfaces: list[InterfaceElements] = field(default_factory=list)
     interface_dofs: list[np.ndarray] = field(default_factory=list)
+    #: continuum elements backing each interface element, per interface set;
+    #: an interface whose soil has been excavated must switch off with it
+    interface_support: list[list[list[int]]] = field(default_factory=list)
+    #: displacement field at the moment the member was installed; section
+    #: forces are measured from here, so a wall is built stress-free into
+    #: ground that has already moved
+    u_reference: np.ndarray | None = None
 
     def arc_length(self, nodes: np.ndarray) -> np.ndarray:
         xy = nodes[self.chain]
@@ -266,12 +273,26 @@ def build_problem(model: Model, mesh_size: float | None = None) -> FEProblem:
                    if beam.n_elements else np.zeros((0, 9), np.int64))
         sfe = StructureFE(name=st.name, beam=beam, dof_map=dof_map, chain=list(chain_w))
         if st.interface is not None and chain_b is not None:
-            props = _interface_properties(st, model, problem, chain_a)
-            for pairs in (_pair_chain(chain_a, chain_w), _pair_chain(chain_w, chain_b)):
-                if pairs:
-                    ie = InterfaceElements(mesh.nodes, pairs, props)
-                    sfe.interfaces.append(ie)
-                    sfe.interface_dofs.append(ie.dofs())
+            local_size = float(np.sqrt(np.mean(continuum.volumes())))
+            props = _interface_properties(st, model, problem, chain_a, local_size)
+            soil_sides = ((_pair_chain(chain_a, chain_w), chain_a),
+                          (_pair_chain(chain_w, chain_b), chain_b))
+            incidence = _node_to_elements(mesh)
+            for pairs, soil_chain in soil_sides:
+                if not pairs:
+                    continue
+                ie = InterfaceElements(mesh.nodes, pairs, props)
+                sfe.interfaces.append(ie)
+                sfe.interface_dofs.append(ie.dofs())
+                soil_nodes = set(int(v) for v in soil_chain)
+                support = []
+                for (side_a, side_b) in pairs:
+                    nodes_here = [v for v in list(side_a) + list(side_b) if v in soil_nodes]
+                    elems: set[int] = set()
+                    for v in nodes_here:
+                        elems.update(incidence.get(v, ()))
+                    support.append(sorted(elems))
+                sfe.interface_support.append(support)
         problem.structures.append(sfe)
 
     # ----------------------------------------------------------------- anchors
@@ -295,6 +316,14 @@ def build_problem(model: Model, mesh_size: float | None = None) -> FEProblem:
     return problem
 
 
+def _node_to_elements(mesh: Mesh) -> dict[int, list[int]]:
+    incidence: dict[int, list[int]] = {}
+    for e, el in enumerate(mesh.elements):
+        for v in el:
+            incidence.setdefault(int(v), []).append(e)
+    return incidence
+
+
 def _pair_chain(chain_a, chain_b):
     """Quadratic interface element node pairs between two parallel chains."""
     if chain_b is None or len(chain_a) != len(chain_b):
@@ -306,23 +335,34 @@ def _pair_chain(chain_a, chain_b):
     return pairs
 
 
-def _interface_properties(structure, model, problem, chain) -> InterfaceProperties:
-    """Interface strength as R_inter times the strength of the adjacent soil."""
+def _interface_properties(structure, model, problem, chain, element_size) -> InterfaceProperties:
+    """Fill in interface properties left unset, from the adjacent soil.
+
+    Strength follows the usual R_inter rule - tan(phi_i) = R tan(phi') and
+    c_i = R c' - and stiffness follows the virtual thickness convention,
+    kn = E_oed / t_v with t_v a small fraction of the local element size.
+    Scaling the stiffness with the mesh keeps the elastic slip negligible
+    without making the contact so stiff that it dominates the conditioning of
+    the global system.
+    """
     props = structure.interface
     if props is None:
         return InterfaceProperties()
-    if props.c or props.phi:
-        return props
     soil = _adjacent_material(problem, chain)
-    c = getattr(soil, "c", 0.0) * structure.r_inter
-    phi = math.degrees(math.atan(structure.r_inter
-                                 * math.tan(math.radians(getattr(soil, "phi", 25.0)))))
-    # A stiff interface: soft enough to avoid ill-conditioning, stiff enough
-    # that elastic slip stays small compared with the soil deformation.
+    r = structure.r_inter
+    c = props.c if props.c is not None else getattr(soil, "c", 0.0) * r
+    phi = props.phi
+    if phi is None:
+        phi = math.degrees(math.atan(r * math.tan(math.radians(getattr(soil, "phi", 25.0)))))
     E = getattr(soil, "E", 3.0e4)
-    kn = props.kn if props.kn else 100.0 * E
-    ks = props.ks if props.ks else 100.0 * E
-    return InterfaceProperties(kn=kn, ks=ks, c=c, phi=phi, tensile=props.tensile)
+    nu = getattr(soil, "nu", 0.3)
+    t_v = max(props.virtual_thickness * element_size, 1e-3)
+    e_oed = E * (1.0 - nu) / ((1.0 + nu) * (1.0 - 2.0 * nu))
+    shear = E / (2.0 * (1.0 + nu))
+    kn = props.kn if props.kn is not None else e_oed / t_v
+    ks = props.ks if props.ks is not None else shear / t_v
+    return InterfaceProperties(kn=kn, ks=ks, c=c, phi=phi, tensile=props.tensile,
+                               virtual_thickness=props.virtual_thickness)
 
 
 def _adjacent_material(problem, chain):

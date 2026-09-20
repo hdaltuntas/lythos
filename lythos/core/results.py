@@ -88,7 +88,9 @@ def structure_forces(problem: FEProblem, result: StageResult, name: str) -> dict
             continue
         if not s.beam.n_elements:
             break
-        raw = s.beam.section_forces(result.displacement, s.dof_map)
+        # Section forces follow the displacement since installation.
+        u = result.displacement if s.u_reference is None else result.displacement
+        raw = s.beam.section_forces(u, s.dof_map)
         if len(raw) == 0:
             break
         # order the sample points along the member and drop duplicates at joins

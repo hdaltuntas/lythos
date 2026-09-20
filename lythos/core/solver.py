@@ -56,6 +56,7 @@ class Solver:
         self._u = np.zeros(problem.dofs.n_dof)
         self._state = MaterialState.zeros(problem.continuum.n_points)
         self._u_offset = np.zeros(problem.dofs.n_dof)   # displacements reset by a stage
+        self._installed: set[str] = set()               # structures already built
         x0, y0, x1, y1 = problem.mesh.bounds()
         self._size = max(x1 - x0, y1 - y0, 1.0)          # model size, for step limits
 
@@ -132,17 +133,20 @@ class Solver:
         """
         base_u = self._u.copy()
         base_state = self._state.copy()
+        base_structures = self._snapshot_structures()
         base_materials = list(self.p.materials)
         reference_offset = self._u_offset.copy()
 
         curve: list[tuple[float, float]] = []
         anchor_u, anchor_state = base_u.copy(), base_state.copy()
+        anchor_structures = base_structures
         best_u, best_state = base_u.copy(), base_state.copy()
 
-        def attempt(srf: float, warm_u, warm_state):
+        def attempt(srf: float, warm_u, warm_state, warm_structures):
             self.p.materials = [m.reduced(srf) for m in base_materials]
             self._u = warm_u.copy()
             self._state = warm_state.copy()
+            self._restore_structures(warm_structures)
             res = self._newton(stage, active, increments=max(stage.increments, 6),
                                label=f"SRF {srf:.3f}")
             disp = (self._u - reference_offset)[: 2 * self.p.mesh.n_nodes].reshape(-1, 2)
@@ -156,10 +160,11 @@ class Solver:
         last_ok = None
         hi = stage.srf_max
         for _ in range(30):
-            ok, _dmax = attempt(srf, anchor_u, anchor_state)
+            ok, _dmax = attempt(srf, anchor_u, anchor_state, anchor_structures)
             if ok:
                 last_ok = srf
                 anchor_u, anchor_state = self._u.copy(), self._state.copy()
+                anchor_structures = self._snapshot_structures()
                 best_u, best_state = anchor_u, anchor_state
                 if srf >= stage.srf_max:
                     hi = stage.srf_max
@@ -182,10 +187,11 @@ class Solver:
                 if hi - lo <= 0.01:
                     break
                 mid = 0.5 * (lo + hi)
-                ok, _d = attempt(mid, anchor_u, anchor_state)
+                ok, _d = attempt(mid, anchor_u, anchor_state, anchor_structures)
                 if ok:
                     lo = mid
                     anchor_u, anchor_state = self._u.copy(), self._state.copy()
+                    anchor_structures = self._snapshot_structures()
                     best_u, best_state = anchor_u, anchor_state
                 else:
                     hi = mid
@@ -193,6 +199,7 @@ class Solver:
             message = f"factor of safety {fos:.3f}, bracketed within {hi - lo:.3f}"
 
         self._u, self._state = best_u, best_state
+        self._restore_structures(anchor_structures)
         self.p.materials = base_materials
         result = StageResult(name=stage.name, kind="ssr", converged=last_ok is not None,
                              displacement=self._u - reference_offset, state=self._state,
@@ -201,6 +208,21 @@ class Solver:
         result.active_structures = list(stage.active_structures or [])
         result.active_anchors = list(stage.active_anchors or [])
         return result
+
+    # ------------------------------------------------------- structural state
+    def _snapshot_structures(self):
+        """Committed interface tractions, so a trial can be rolled back."""
+        return [[ie.snapshot() for ie in st.interfaces] for st in self.p.structures]
+
+    def _restore_structures(self, saved) -> None:
+        for st, states in zip(self.p.structures, saved):
+            for ie, state in zip(st.interfaces, states):
+                ie.restore(state)
+
+    def _commit_structures(self) -> None:
+        for st in self.p.structures:
+            for ie in st.interfaces:
+                ie.commit()
 
     # ----------------------------------------------------------------- newton
     def _newton(self, stage: Stage, active: np.ndarray, increments: int,
@@ -221,7 +243,18 @@ class Solver:
                 np.add.at(f_ext, s.dof_map.ravel(), w.ravel())
 
         u_committed = self._u.copy()
+        # A member is built into ground that has already deformed, so it starts
+        # free of force: its reference displacement is the field at the moment
+        # of installation, and any interface tie tractions from before are
+        # cleared rather than carried into the contact.
+        for st in active_structs:
+            if st.name not in self._installed:
+                st.u_reference = u_committed.copy()
+                for ie in st.interfaces:
+                    ie.restore(np.zeros_like(ie.committed))
+                self._installed.add(st.name)
         state_committed = self._state.copy()
+        structures_committed = self._snapshot_structures()
         f_int0, _, _ = self._internal(u_committed, u_committed, state_committed, active,
                                       active_structs, stage, tangent=False)
 
@@ -242,6 +275,7 @@ class Solver:
             target = f_int0 + trial * (f_ext - f_int0)
             u_try = u_committed.copy()
             ok = False
+            stalled = 0
             for it in range(self.max_iterations):
                 f_int, K, state = self._internal(u_try, u_committed, state_committed, active,
                                                  active_structs, stage, tangent=True)
@@ -257,9 +291,16 @@ class Solver:
                     message = "singular stiffness matrix"
                     break
                 du = self._limit_step(du)
-                u_try = self._line_search(u_try, du, u_committed, state_committed, target,
-                                          active, active_structs, stage, fixed,
-                                          float(np.linalg.norm(r)))
+                u_try, improved = self._line_search(u_try, du, u_committed, state_committed,
+                                                    target, active, active_structs, stage,
+                                                    fixed, float(np.linalg.norm(r)))
+                if not improved:
+                    stalled += 1
+                    if stalled >= 2:
+                        message = "the Newton step stopped reducing the imbalance"
+                        break
+                else:
+                    stalled = 0
                 if not np.all(np.isfinite(u_try)) or np.linalg.norm(u_try) > 1.0e6 * self._size:
                     message = "displacements ran away"
                     break
@@ -267,12 +308,15 @@ class Solver:
             if ok:
                 _f, _K, state = self._internal(u_try, u_committed, state_committed, active,
                                                active_structs, stage, tangent=False)
+                self._commit_structures()
+                structures_committed = self._snapshot_structures()
                 u_committed = u_try
                 state_committed = state
                 lam = trial
                 if it < 6 and dlam < 1.0 / max(increments, 1):
                     dlam = min(2.0 * dlam, 1.0 / max(increments, 1))
             else:
+                self._restore_structures(structures_committed)
                 dlam *= 0.5
                 cuts += 1
                 if dlam < min_dlam or cuts > 20:
@@ -281,6 +325,7 @@ class Solver:
                     break
 
         converged_all = lam >= 1.0 - 1e-10
+        self._restore_structures(structures_committed)
         self._u = u_committed
         self._state = state_committed
 
@@ -317,15 +362,18 @@ class Solver:
 
         full = residual(1.0)
         if full <= r0_norm or r0_norm == 0.0:
-            return u + du
+            return u + du, True
         best_alpha, best = 1.0, full
-        for alpha in (0.5, 0.25, 0.1):
+        for alpha in (0.5, 0.25, 0.1, 0.03):
             value = residual(alpha)
             if value < best:
                 best_alpha, best = alpha, value
             if value < r0_norm:
-                break
-        return u + best_alpha * du
+                return u + alpha * du, True
+        # Even the shortest step makes the imbalance worse: the tangent is not
+        # describing this state, and pressing on only diverges.  Report the
+        # failure so the increment is cut instead.
+        return u + best_alpha * du, best < 1.5 * r0_norm
 
     # ------------------------------------------------------------- assembly
     def _internal(self, u, u_committed, state_committed, active, active_structs,
@@ -363,17 +411,28 @@ class Solver:
         for s in p.structures:
             live = s.name in active_names
             if live and s.beam.n_elements:
-                Kb, Fb = s.beam.stiffness_and_force(u, s.dof_map)
+                u_beam = u if s.u_reference is None else u - s.u_reference
+                Kb, Fb = s.beam.stiffness_and_force(u_beam, s.dof_map)
                 asm.add_vector(s.dof_map, Fb)
                 if tangent:
                     asm.add(s.dof_map, Kb)
             # Interfaces are always assembled: as a Mohr-Coulomb contact once
-            # the structure is installed, and as a rigid tie before that.
-            for ie, idofs in zip(s.interfaces, s.interface_dofs):
-                Ki, Fi = ie.stiffness_and_force(u, rigid=not live)
-                asm.add_vector(idofs, Fi)
+            # the structure is installed, and as a rigid tie before that.  An
+            # interface whose soil has been excavated away is left out
+            # entirely, so it cannot hold the wall against nothing.
+            for k, (ie, idofs) in enumerate(zip(s.interfaces, s.interface_dofs)):
+                support = s.interface_support[k] if k < len(s.interface_support) else None
+                if support is None:
+                    mask = None
+                else:
+                    mask = np.array([bool(sup) and bool(active[sup].any()) for sup in support])
+                    if not mask.any():
+                        continue
+                u_int = u if (not live or s.u_reference is None) else u - s.u_reference
+                Ki, Fi = ie.stiffness_and_force(u_int, rigid=not live)
+                asm.add_vector(idofs, Fi, active=mask)
                 if tangent:
-                    asm.add(idofs, Ki)
+                    asm.add(idofs, Ki, active=mask)
 
         if p.anchors is not None and stage.active_anchors:
             keep = np.array([name in set(stage.active_anchors) for name in p.anchor_names])
@@ -400,8 +459,14 @@ class Solver:
         for s in p.structures:
             if s.name in {a.name for a in active_structs}:
                 live[s.dof_map.ravel()] = True
-            for d in s.interface_dofs:
-                live[d.ravel()] = True
+            for k, d in enumerate(s.interface_dofs):
+                support = s.interface_support[k] if k < len(s.interface_support) else None
+                if support is None:
+                    live[d.ravel()] = True
+                    continue
+                for e, sup in enumerate(support):
+                    if sup and active[sup].any():
+                        live[d[e]] = True
         return live
 
 

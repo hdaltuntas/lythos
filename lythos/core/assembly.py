@@ -79,7 +79,7 @@ class SystemAssembler:
                 return
         np.add.at(self.force, dofs.ravel(), Fe.ravel())
 
-    def matrix(self, symmetrise: bool = True) -> sp.csr_matrix:
+    def matrix(self, symmetrise: bool = False) -> sp.csr_matrix:
         if not self._vals:
             return sp.csr_matrix((self.n_dof, self.n_dof))
         rows = np.concatenate(self._rows)
@@ -87,10 +87,11 @@ class SystemAssembler:
         vals = np.concatenate(self._vals)
         K = sp.coo_matrix((vals, (rows, cols)), shape=(self.n_dof, self.n_dof)).tocsr()
         if symmetrise:
-            # Non-associated flow gives an unsymmetric tangent; the symmetric
-            # part keeps the factorisation cheap and, with a line search, still
-            # converges.
             K = 0.5 * (K + K.T)
+        # The tangent is genuinely unsymmetric - non-associated plastic flow
+        # and frictional sliding both make it so - and the sparse LU solver
+        # handles that directly.  Symmetrising it costs Newton its convergence
+        # rate exactly where the soil is failing.
         return K
 
 
