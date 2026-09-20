@@ -292,12 +292,19 @@ def write_html(model: Model, problem: FEProblem, results, summary: dict,
 <h2>Notes</h2>
 <ul>
  <li>Stresses are effective stresses; pore pressure is hydrostatic below the phreatic
-     surface and the horizontal gradient of the pressure is carried as a seepage force.</li>
+     surface and the horizontal gradient of the pressure is carried as a seepage force.
+     There is no consolidation and no flow analysis.</li>
  <li>Compression is negative in the stress output and positive in p&prime;.</li>
  <li>Structural forces are per metre run of wall; divide by the spacing given in the
      section table to get the force in one pile.</li>
  <li>The factor of safety comes from strength reduction: c&prime; and tan&phi;&prime; are divided
-     by a trial factor until no equilibrium state exists.</li>
+     by a trial factor until no equilibrium state exists. <b>A coarse mesh cannot
+     resolve the shear band and makes the ground look stronger than it is</b>, so refine
+     until the factor stops moving and read a single coarse run as an upper bound.
+     The displacement against reduction factor curve is plotted above; the knee in it
+     is what confirms a mechanism formed rather than the solver giving up.</li>
+ <li>Soil is elastic-perfectly plastic, so displacements under working loads are only
+     as good as the single stiffness chosen for the stress range that matters.</li>
 </ul>
 </body></html>
 """

@@ -70,8 +70,10 @@ to circles that stay above the rigid base — gives
 FoS = 1.377   centre (8.0, 24.0), radius 24.0 m
 ```
 
-Strength reduction converges to **1.39 to 1.40**, within 1 to 2% of the
-circular-surface result. The
+Strength reduction converges to **1.38**, within 0.3% of the circular-surface
+result on the finest mesh tried. The two need not agree exactly: strength
+reduction finds whatever surface is critical rather than the best circle
+available, so it is free to find a slightly weaker one. The
 two should not agree exactly: strength reduction finds whatever surface is
 critical rather than the best circle available.
 
@@ -85,18 +87,20 @@ equilibrium search found:
 
 | Target element size | Elements | Factor of safety |
 | --- | --- | --- |
-| 3.0 m | 129 | 1.475 |
-| 2.5 m | 167 | 1.438 |
-| 2.0 m | 244 | 1.400 |
-| 1.6 m | 348 | 1.400 |
-| 1.3 m | 499 | 1.387 |
+| 3.0 m | 90 | 1.466 |
+| 2.5 m | 140 | 1.430 |
+| 2.0 m | 203 | 1.416 |
+| 1.6 m | 315 | 1.395 |
+| 1.3 m | 471 | 1.381 |
 
-Refining reduces the factor of safety towards a limit, and by less each time:
-the answer settles at 1.39 to 1.40, within 1% of the independent limit
-equilibrium result. The direction is the expected one - a coarse mesh cannot
-resolve the shear band, so it makes the slope look stronger than it is.
-**A strength reduction result from a coarse mesh is unconservative**: refine
-until the answer stops moving, and treat a single coarse run as an upper bound.
+Refining reduces the factor of safety towards a limit, and by less each time.
+At the finest mesh the answer is 1.381 against the 1.377 the independent limit
+equilibrium search found - a difference of 0.3%.
+
+The direction is the expected one: a coarse mesh cannot resolve the shear band,
+so it makes the slope look stronger than it is. **A strength reduction result
+from a coarse mesh is unconservative** - refine until the answer stops moving,
+and read a single coarse run as an upper bound.
 
 The displacement-versus-factor curve is reported with every strength reduction
 analysis, and should be inspected: the knee is what confirms a mechanism has

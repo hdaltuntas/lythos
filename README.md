@@ -69,7 +69,7 @@ model = Model(
 )
 
 summary = run_and_report(model, out_dir="out/slope")
-print(summary["stages"][-1]["factor_of_safety"])      # 1.40
+print(summary["stages"][-1]["factor_of_safety"])      # 1.42 at this mesh size
 ```
 
 `run_and_report` writes a self-contained HTML report with every figure
@@ -128,7 +128,7 @@ Every claim below is a test in `tests/`:
 | Patch test, linear displacement field | constant stress | exact to 1e-12 |
 | Cantilever tip deflection | `PL³/3EI + PL/GA` | within 0.2% |
 | Slender beam, h/L = 1/1000 | no shear locking | within 2% |
-| 2:1 slope factor of safety | 1.377, independent Bishop search | 1.39 to 1.40, mesh converged |
+| 2:1 slope factor of safety | 1.377, independent Bishop search | 1.381 on a 471-element mesh |
 | Algorithmic tangent | numerical derivative | within 4e-4 of E, everywhere |
 
 ```bash
