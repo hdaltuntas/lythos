@@ -359,14 +359,18 @@ class Solver:
             Ke = ce.stiffness(tangents)
             asm.add(dofs, Ke, active=active)
 
-        for s in active_structs:
-            if s.beam.n_elements:
+        active_names = {s.name for s in active_structs}
+        for s in p.structures:
+            live = s.name in active_names
+            if live and s.beam.n_elements:
                 Kb, Fb = s.beam.stiffness_and_force(u, s.dof_map)
                 asm.add_vector(s.dof_map, Fb)
                 if tangent:
                     asm.add(s.dof_map, Kb)
+            # Interfaces are always assembled: as a Mohr-Coulomb contact once
+            # the structure is installed, and as a rigid tie before that.
             for ie, idofs in zip(s.interfaces, s.interface_dofs):
-                Ki, Fi = ie.stiffness_and_force(u)
+                Ki, Fi = ie.stiffness_and_force(u, rigid=not live)
                 asm.add_vector(idofs, Fi)
                 if tangent:
                     asm.add(idofs, Ki)
@@ -393,8 +397,9 @@ class Solver:
         nodes = np.unique(p.mesh.elements[active]) if active.any() else np.zeros(0, int)
         live[2 * nodes] = True
         live[2 * nodes + 1] = True
-        for s in active_structs:
-            live[s.dof_map.ravel()] = True
+        for s in p.structures:
+            if s.name in {a.name for a in active_structs}:
+                live[s.dof_map.ravel()] = True
             for d in s.interface_dofs:
                 live[d.ravel()] = True
         return live

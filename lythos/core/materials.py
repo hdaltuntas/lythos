@@ -218,30 +218,102 @@ class MohrCoulomb(Material):
             return apex
         return min(self.tension_cutoff, apex)
 
+    @staticmethod
+    def _tension_return(s: np.ndarray, limit: float, De: np.ndarray):
+        """Associated return onto the tension cut-off planes.
+
+        The criterion is one plane per principal stress, ``s_i <= limit``.
+        Because the stresses arrive sorted, the set of violated planes is
+        always a prefix, so trying the prefixes in turn finds the active set
+        without a general search.  Returning along ``De`` rather than simply
+        truncating the stress is what makes the accompanying tangent
+        consistent, and that is what the global Newton iteration needs in
+        order to converge inside a cracked zone.
+        """
+        out = s.copy()
+        tang = np.broadcast_to(De, (len(s), 3, 3)).copy()
+        remaining = np.ones(len(s), bool)
+        for m in (1, 2, 3):
+            if not remaining.any():
+                break
+            M = np.linalg.inv(De[:m, :m])
+            cols = De[:, :m]
+            rows = np.nonzero(remaining)[0]
+            lam = (s[rows][:, :m] - limit) @ M.T
+            cand = s[rows] - lam @ cols.T
+            ok = np.all(lam >= -1e-12, axis=1)
+            if m < 3:
+                ok &= np.all(cand[:, m:] <= limit + 1e-9, axis=1)
+            idx = rows[ok]
+            out[idx] = cand[ok]
+            tang[idx] = De - cols @ M @ De[:m, :]
+            remaining[idx] = False
+        if remaining.any():          # degenerate: fall back to truncation
+            out[remaining] = np.minimum(s[remaining], limit)
+            tang[remaining] = 1e-6 * De
+        return out, tang
+
+    def _criteria(self):
+        """Yield surfaces as (normal, flow direction, offset) in sorted principal space.
+
+        The Mohr-Coulomb pyramid contributes its main face plus the two faces
+        that bound the sorted sector; intersecting the main face with f(s2, s3)
+        gives the edge s1 = s2 and with f(s1, s2) the edge s2 = s3, which is
+        why the pairs below look swapped relative to the violated ordering.
+        The tension cut-off contributes one plane per principal stress.
+        """
+        sphi, spsi, k = self._params()
+        st = self.tension_limit()
+        eye = np.eye(3)
+        return {
+            "main": (np.array([1.0 + sphi, 0.0, -1.0 + sphi]),
+                     np.array([1.0 + spsi, 0.0, -1.0 + spsi]), k),
+            "s12": (np.array([1.0 + sphi, -1.0 + sphi, 0.0]),
+                    np.array([1.0 + spsi, -1.0 + spsi, 0.0]), k),
+            "s23": (np.array([0.0, 1.0 + sphi, -1.0 + sphi]),
+                    np.array([0.0, 1.0 + spsi, -1.0 + spsi]), k),
+            "t0": (eye[0], eye[0], st),
+            "t1": (eye[1], eye[1], st),
+            "t2": (eye[2], eye[2], st),
+        }
+
+    #: candidate active sets, tried in order of increasing size.  The first one
+    #: that returns a stress satisfying both criteria with non-negative plastic
+    #: multipliers is the correct region for that point.
+    ACTIVE_SETS = (
+        ("main",),
+        ("t0",),
+        ("main", "s23"),
+        ("main", "s12"),
+        ("main", "t0"),
+        ("t0", "t1"),
+        ("main", "s23", "t0"),
+        ("main", "s12", "t0"),
+        ("main", "t0", "t1"),
+        ("t0", "t1", "t2"),
+    )
+
     def _return_map(self, s: np.ndarray):
         """Map sorted trial principal stresses back onto the yield surface.
 
-        ``s`` holds s1 >= s2 >= s3 (tension positive).  The Mohr-Coulomb
-        pyramid is linear, so each return - to the main face, to one of the two
-        edges bounding the sorted sector, or to the apex - is a closed-form
-        expression rather than a local Newton iteration.
+        ``s`` holds s1 >= s2 >= s3 (tension positive).  Both criteria are
+        linear in the principal stresses, so for any given set of active
+        surfaces the return is the solution of a small linear system, and its
+        consistent tangent follows in closed form.  Which surfaces are active
+        is found by trying the candidate sets in turn and keeping the first
+        that satisfies the loading-unloading conditions - a search rather than
+        a chain of geometric tests, which is what makes the corners between
+        the shear criterion and the tension cut-off come out right.
         """
-        sphi, spsi, k = self._params()
+        crit = self._criteria()
+        a_main, _b_main, k = crit["main"]
         De = self._elastic_principal()
         n = len(s)
         st_max = self.tension_limit()
+        scale = max(abs(k), self.E * 1e-6, 1.0)
+        tol = 1e-10 * scale
 
-        a_main = np.array([1.0 + sphi, 0.0, -1.0 + sphi])
-        b_main = np.array([1.0 + spsi, 0.0, -1.0 + spsi])
-        a_12 = np.array([1.0 + sphi, -1.0 + sphi, 0.0])
-        b_12 = np.array([1.0 + spsi, -1.0 + spsi, 0.0])
-        a_23 = np.array([0.0, 1.0 + sphi, -1.0 + sphi])
-        b_23 = np.array([0.0, 1.0 + spsi, -1.0 + spsi])
-
-        tol = 1e-10 * max(k, self.E * 1e-6, 1.0)
-        f_mc = s @ a_main - k
-        plastic = (f_mc > tol) | (s[:, 0] > st_max + tol)
-
+        plastic = (s @ a_main - k > tol) | (s[:, 0] > st_max + tol)
         out = s.copy()
         tangents = np.broadcast_to(De, (n, 3, 3)).copy()
         if not plastic.any():
@@ -251,59 +323,46 @@ class MohrCoulomb(Material):
         trial = s[idx]
         res = trial.copy()
         tang = np.broadcast_to(De, (len(idx), 3, 3)).copy()
+        unsolved = np.ones(len(idx), bool)
 
-        # Two passes let a state that violates both the shear criterion and the
-        # tension cut-off settle onto their common corner.
-        for _pass in range(2):
-            active = res @ a_main - k > tol
-            if active.any():
-                sub = np.nonzero(active)[0]
-                start = res[sub]
-
-                denom = float(a_main @ De @ b_main)
-                lam = (start @ a_main - k) / denom
-                cand = start - lam[:, None] * (De @ b_main)
-                local = cand.copy()
-                local_t = np.broadcast_to(De - np.outer(De @ b_main, De @ a_main) / denom,
-                                          (len(sub), 3, 3)).copy()
-
-                # A face return that leaves the sorted sector means the point
-                # belongs to an edge of the pyramid.  Intersecting the main
-                # face with f(s2, s3) gives the edge s1 = s2, and with
-                # f(s1, s2) the edge s2 = s3 - so the criteria pair up the
-                # opposite way round from the violated inequality.
-                for mask, a2, b2 in ((cand[:, 0] < cand[:, 1] - 1e-12, a_23, b_23),
-                                     (cand[:, 1] < cand[:, 2] - 1e-12, a_12, b_12)):
-                    if not mask.any():
-                        continue
-                    A = np.column_stack([a_main, a2])
-                    B = np.column_stack([b_main, b2])
-                    Minv = np.linalg.inv(A.T @ De @ B)
-                    fv = np.column_stack([start[mask] @ a_main - k, start[mask] @ a2 - k])
-                    local[mask] = start[mask] - (fv @ Minv.T) @ (De @ B).T
-                    local_t[mask] = De - (De @ B) @ Minv @ (A.T @ De)
-
-                if sphi > 1e-9:
-                    apex = self.c / math.tan(math.radians(self.phi))
-                    beyond = local[:, 2] > apex + 1e-9
-                    if beyond.any():
-                        local[beyond] = apex
-                        local_t[beyond] = self.residual_stiffness * De
-
-                res[sub] = local
-                tang[sub] = local_t
-
-            over = res[:, 0] > st_max + tol
-            if not over.any():
+        for names in self.ACTIVE_SETS:
+            if not unsolved.any():
                 break
-            # Return along the principal axes onto the tension cut-off plane.
-            # Only the clipped components lose their stiffness; the others stay
-            # elastic, which is what keeps a cracked zone from going rigid-body.
-            clipped = res[over] > st_max
-            res[over] = np.minimum(res[over], st_max)
-            keep = (~clipped).astype(float)
-            proj = keep[:, :, None] * keep[:, None, :]
-            tang[over] = proj * De + self.residual_stiffness * De
+            if st_max == math.inf and any(name.startswith("t") for name in names):
+                continue
+            A = np.column_stack([crit[nm][0] for nm in names])
+            B = np.column_stack([crit[nm][1] for nm in names])
+            offsets = np.array([crit[nm][2] for nm in names])
+            M = A.T @ De @ B
+            if abs(np.linalg.det(M)) < 1e-12 * scale ** len(names):
+                continue
+            Minv = np.linalg.inv(M)
+            rows = np.nonzero(unsolved)[0]
+            lam = (trial[rows] @ A - offsets) @ Minv.T
+            cand = trial[rows] - lam @ (De @ B).T
+            ok = (np.all(lam >= -1e-9 * scale, axis=1)
+                  & (cand @ a_main - k <= 1e-7 * scale)
+                  & (cand[:, 0] <= st_max + 1e-7 * scale)
+                  & (cand[:, 0] >= cand[:, 1] - 1e-7 * scale)
+                  & (cand[:, 1] >= cand[:, 2] - 1e-7 * scale))
+            take = rows[ok]
+            res[take] = cand[ok]
+            tang[take] = De - (De @ B) @ Minv @ (A.T @ De)
+            unsolved[take] = False
+
+        if unsolved.any():
+            # The tip of the cone: no combination of planes applies, so the
+            # only admissible point is the apex itself (or the cut-off, when
+            # that sits lower).  It carries no strength, hence the token
+            # stiffness that keeps the global system solvable.
+            sub = np.nonzero(unsolved)[0]
+            apex = (self.c / math.tan(math.radians(self.phi))
+                    if self.phi > 1e-9 else math.inf)
+            limit = min(apex, st_max)
+            if not math.isfinite(limit):
+                limit = float(np.min(trial[sub]))
+            res[sub] = limit
+            tang[sub] = self.residual_stiffness * De
 
         out[idx] = res
         tangents[idx] = tang

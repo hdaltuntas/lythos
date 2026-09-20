@@ -282,13 +282,22 @@ class InterfaceElements:
                 d[e, 6 + 2 * i + 1] = 2 * b[i] + 1
         return d
 
-    def stiffness_and_force(self, u: np.ndarray):
+    def stiffness_and_force(self, u: np.ndarray, rigid: bool = False):
+        """Interface forces and stiffness.
+
+        ``rigid`` ties the two sides together instead of letting them slip.
+        That is what an interface does before its structure is installed: the
+        node pairs exist in the mesh from the start, and without the tie the
+        soil would be split along the future wall line from the very first
+        stage.
+        """
         ne = self.n_elements
         Ke = np.zeros((ne, 12, 12))
         Fe = np.zeros((ne, 12))
         dofs = self.dofs()
         p = self.props
         tan_phi = np.tan(np.radians(p.phi))
+        tie = 1.0e3 * max(p.kn, p.ks, 1.0)
         for e in range(ne):
             a, b = self.pairs[e]
             xy = self.nodes[list(a)]
@@ -311,6 +320,11 @@ class InterfaceElements:
                     Bs[6 + 2 * i], Bs[6 + 2 * i + 1] = N[i] * t[0], N[i] * t[1]
                 dn = float(Bn @ ue)
                 ds = float(Bs @ ue)
+                if rigid:
+                    k += w * jac * tie * (np.outer(Bn, Bn) + np.outer(Bs, Bs))
+                    fi += w * jac * tie * (dn * Bn + ds * Bs)
+                    self.state[e, g] = (tie * dn, tie * ds)
+                    continue
                 tn = p.kn * dn
                 ts = p.ks * ds
                 kn_eff, ks_eff = p.kn, p.ks

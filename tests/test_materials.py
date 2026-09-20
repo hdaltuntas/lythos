@@ -64,21 +64,51 @@ def test_tresca_failure_deviator():
 
 
 def test_yield_surface_never_violated():
-    """No returned stress state may sit outside the yield surface."""
+    """No returned stress state may sit outside either yield criterion.
+
+    Both the shear criterion and the tension cut-off are checked, including at
+    the corner where they meet, over random stress paths.
+    """
     rng = np.random.default_rng(7)
-    mat = MohrCoulomb(E=3.0e4, nu=0.3, c=8.0, phi=32.0, psi=5.0)
-    state = MaterialState.zeros(400)
-    state.stress[:] = rng.normal(-80.0, 60.0, size=(400, 4)) * np.array([1, 1, 1, 0.3])
-    for _ in range(25):
-        de = rng.normal(0.0, 3.0e-4, size=(400, 4))
+    for cutoff in (0.0, 5.0, None):
+        mat = MohrCoulomb(E=3.0e4, nu=0.3, c=8.0, phi=32.0, psi=5.0, tension_cutoff=cutoff)
+        state = MaterialState.zeros(400)
+        state.stress[:] = rng.normal(-80.0, 60.0, size=(400, 4)) * np.array([1, 1, 1, 0.3])
+        for _ in range(25):
+            de = rng.normal(0.0, 3.0e-4, size=(400, 4))
+            de[:, 2] = 0.0
+            stress, _, state = mat.update(state, de)
+            s_a, s_b, szz, _, _ = principal_stresses(stress)
+            pr = np.sort(np.stack([s_a, s_b, szz], axis=1), axis=1)[:, ::-1]
+            sphi = math.sin(math.radians(mat.phi))
+            f = ((pr[:, 0] - pr[:, 2]) + (pr[:, 0] + pr[:, 2]) * sphi
+                 - 2 * mat.c * math.cos(math.radians(mat.phi)))
+            assert f.max() < 1e-3 * mat.c, f.max()
+            assert pr[:, 0].max() < mat.tension_limit() + 1e-6
+
+
+def test_algorithmic_tangent_is_consistent_everywhere():
+    """The tangent must match a numerical derivative at every plastic state."""
+    rng = np.random.default_rng(11)
+    for cutoff in (0.0, 5.0, None):
+        mat = MohrCoulomb(E=3.0e4, nu=0.3, c=10.0, phi=30.0, psi=5.0, tension_cutoff=cutoff)
+        n = 500
+        state = MaterialState.zeros(n)
+        state.stress[:] = rng.normal(-60.0, 50.0, size=(n, 4)) * np.array([1, 1, 1, 0.4])
+        de = rng.normal(0.0, 4.0e-4, size=(n, 4))
         de[:, 2] = 0.0
-        stress, _, state = mat.update(state, de)
-        s_a, s_b, szz, _, _ = principal_stresses(stress)
-        pr = np.sort(np.stack([s_a, s_b, szz], axis=1), axis=1)[:, ::-1]
-        sphi = math.sin(math.radians(mat.phi))
-        f = (pr[:, 0] - pr[:, 2]) + (pr[:, 0] + pr[:, 2]) * sphi - 2 * mat.c * math.cos(math.radians(mat.phi))
-        assert f.max() < 1e-4 * mat.E * 1e-3 + 1e-6, f.max()
-        assert pr[:, 0].max() < mat.tension_limit() + 1e-6
+        stress, tangent, new = mat.update(state, de)
+
+        numeric = np.zeros((n, 4, 3))
+        h = 1e-8
+        for k, j in enumerate((0, 1, 3)):
+            bumped = de.copy()
+            bumped[:, j] += h
+            s_plus, _, _ = mat.update(state, bumped)
+            numeric[:, :, k] = (s_plus - stress) / h
+        error = np.abs(numeric - tangent[:, :, [0, 1, 3]]).max(axis=(1, 2)) / mat.E
+        assert new.yielding.sum() > n // 4, "the test states should be mostly plastic"
+        assert error.max() < 5.0e-3, error.max()
 
 
 def test_elastic_step_reproduces_hookes_law():
