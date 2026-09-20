@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lythos"
+version = "0.1.0"
+description = "2D finite element analysis for geotechnical engineering: slopes, embankments, deep excavations, SSR factor of safety and structural forces in piles and walls."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Lythos contributors" }]
+dependencies = ["numpy>=1.24", "scipy>=1.10", "matplotlib>=3.7"]
+
+[project.scripts]
+lythos = "lythos.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["lythos*"]
+
+[tool.setuptools.package-data]
+"lythos.gui" = ["static/*"]
