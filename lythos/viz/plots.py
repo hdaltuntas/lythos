@@ -104,11 +104,14 @@ def _draw_structures(ax, problem: FEProblem, linewidth=2.4):
         ax.plot(xy[:, 0], xy[:, 1], color="#1a237e", linewidth=linewidth,
                 solid_capstyle="round", zorder=6, label="_nolegend_")
     if problem.anchors is not None:
-        for (i, j) in problem.anchors.pairs:
-            p0, p1 = problem.mesh.nodes[i], problem.mesh.nodes[j]
+        for (near, far, weights) in problem.anchors.anchors:
+            p0 = problem.mesh.nodes[near]
+            p1 = weights @ problem.mesh.nodes[far]
             ax.plot([p0[0], p1[0]], [p0[1], p1[1]], color="#b71c1c",
                     linewidth=1.6, linestyle="--", zorder=6)
-            ax.plot([p1[0]], [p1[1]], marker="o", color="#b71c1c", markersize=4, zorder=6)
+            grout = problem.mesh.nodes[far]
+            ax.plot(grout[:, 0], grout[:, 1], linestyle="none", marker="o",
+                    color="#b71c1c", markersize=2.5, alpha=0.7, zorder=6)
 
 
 def _draw_supports(ax, problem: FEProblem):

@@ -297,23 +297,71 @@ def build_problem(model: Model, mesh_size: float | None = None) -> FEProblem:
 
     # ----------------------------------------------------------------- anchors
     if model.anchors:
-        pairs = []
-        props = []
+        # Where a structure has split the mesh, three nodes share a position:
+        # the soil on either side and the structure itself.  An anchor or prop
+        # bearing on a wall must connect to the wall node, not to the soil
+        # beside it, or it simply punches into the ground.
+        structure_nodes = [n for sfe in problem.structures for n in sfe.chain]
+        specs, props, names = [], [], []
         for a in model.anchors:
-            i0 = mesh.nearest_node(*a.start)
-            i1 = mesh.nearest_node(*a.end)
-            if i0 == i1:
+            near = _attach_node(mesh, a.start, structure_nodes)
+            far, weights = _grout_nodes(mesh, a.start, a.end, a.properties.grout_length)
+            if len(far) == 0 or (len(far) == 1 and far[0] == near):
                 continue
-            pairs.append((i0, i1))
+            specs.append((near, np.asarray(far, dtype=np.int64), np.asarray(weights, float)))
             props.append(a.properties)
-        if pairs:
-            problem.anchors = AnchorElements(mesh.nodes, pairs, props)
-            problem.anchor_names = [a.name for a in model.anchors]
+            names.append(a.name)
+        if specs:
+            problem.anchors = AnchorElements(mesh.nodes, specs, props)
+            problem.anchor_names = names
 
     problem.fixed_dofs = _boundary_dofs(model, mesh, dofs)
     problem.state = MaterialState.zeros(continuum.n_points)
     problem.displacement = np.zeros(dofs.n_dof)
     return problem
+
+
+def _attach_node(mesh: Mesh, point, structure_nodes, tol: float = 0.25) -> int:
+    """Node an anchor should connect to, preferring a structure node."""
+    if structure_nodes:
+        candidates = np.asarray(structure_nodes, dtype=np.int64)
+        xy = mesh.nodes[candidates]
+        d = np.hypot(xy[:, 0] - point[0], xy[:, 1] - point[1])
+        i = int(np.argmin(d))
+        if d[i] <= tol:
+            return int(candidates[i])
+    return mesh.nearest_node(*point)
+
+
+def _grout_nodes(mesh: Mesh, start, end, grout_length: float):
+    """Nodes carrying the fixed length of an anchor, with their weights.
+
+    Nodes within the grout length of the far end, measured along the anchor,
+    share the load in proportion to a triangular distribution that peaks at
+    the far end - a simple stand-in for the bond stress along a grout body.
+    """
+    a = np.asarray(start, float)
+    b = np.asarray(end, float)
+    axis = b - a
+    length = float(np.hypot(*axis))
+    if length < 1e-9:
+        return [mesh.nearest_node(*end)], [1.0]
+    axis = axis / length
+    bond = min(max(grout_length, 0.0), length)
+    if bond <= 1e-6:
+        return [mesh.nearest_node(*end)], [1.0]
+
+    rel = mesh.nodes - a
+    along = rel @ axis
+    offset = np.abs(rel[:, 0] * axis[1] - rel[:, 1] * axis[0])
+    radius = max(0.25 * bond, 0.5)
+    near_axis = (along >= length - bond) & (along <= length + 1e-9) & (offset <= radius)
+    idx = np.nonzero(near_axis)[0]
+    if len(idx) == 0:
+        return [mesh.nearest_node(*end)], [1.0]
+    weights = (along[idx] - (length - bond)) / bond + 0.1
+    weights = weights / weights.sum()
+    return idx.tolist(), weights.tolist()
 
 
 def _node_to_elements(mesh: Mesh) -> dict[int, list[int]]:

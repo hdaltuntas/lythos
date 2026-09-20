@@ -57,6 +57,7 @@ class Solver:
         self._state = MaterialState.zeros(problem.continuum.n_points)
         self._u_offset = np.zeros(problem.dofs.n_dof)   # displacements reset by a stage
         self._installed: set[str] = set()               # structures already built
+        self._stressed: set[str] = set()                # anchors already jacked
         x0, y0, x1, y1 = problem.mesh.bounds()
         self._size = max(x1 - x0, y1 - y0, 1.0)          # model size, for step limits
 
@@ -237,11 +238,22 @@ class Solver:
         np.add.at(f_ext, p.continuum.dofs()[active].ravel(), f_body[active].ravel())
         f_ext += p.line_load_vector(stage.active_loads)
         active_structs = [s for s in p.structures if s.name in set(stage.active_structures or [])]
+        # Anchors being stressed in this stage act as a prescribed jack force.
+        stressing = set()
+        if p.anchors is not None:
+            for e, name in enumerate(p.anchor_names):
+                if name in set(stage.active_anchors or []) and name not in self._stressed:
+                    stressing.add(e)
+                    load = p.anchors.prestress_load(e)
+                    if load is not None:
+                        f_ext[load[0]] += load[1]
+        stage_stressing = stressing
         for s in active_structs:
             if s.beam.n_elements:
                 w = s.beam.self_weight(s.dof_map)
                 np.add.at(f_ext, s.dof_map.ravel(), w.ravel())
 
+        self._stressing_now = stage_stressing
         u_committed = self._u.copy()
         # A member is built into ground that has already deformed, so it starts
         # free of force: its reference displacement is the field at the moment
@@ -328,6 +340,15 @@ class Solver:
         self._restore_structures(structures_committed)
         self._u = u_committed
         self._state = state_committed
+        # Once jacked, the anchor keeps the force it was stressed to and from
+        # here on responds elastically about that length.
+        if p.anchors is not None:
+            for e in stage_stressing:
+                p.anchors.set_reference(e, u_committed)
+                self._stressed.add(p.anchor_names[e])
+        self._stressing_now = set()
+        if p.anchors is not None:
+            list(p.anchors.contributions(u_committed))
 
         return StageResult(name=label, kind=stage.kind, converged=converged_all,
                            displacement=self._u - self._u_offset, state=self._state,
@@ -435,13 +456,14 @@ class Solver:
                     asm.add(idofs, Ki, active=mask)
 
         if p.anchors is not None and stage.active_anchors:
-            keep = np.array([name in set(stage.active_anchors) for name in p.anchor_names])
-            if keep.any():
-                Ka, Fa = p.anchors.stiffness_and_force(u)
-                adofs = p.anchors.dofs()
-                asm.add_vector(adofs, Fa, active=keep)
+            wanted = set(stage.active_anchors)
+            skip = getattr(self, "_stressing_now", set())
+            for e, dofs_a, Ka, Fa in p.anchors.contributions(u, skip=skip):
+                if p.anchor_names[e] not in wanted:
+                    continue
+                asm.add_vector(dofs_a[None, :], Fa[None, :])
                 if tangent:
-                    asm.add(adofs, Ka, active=keep)
+                    asm.add(dofs_a[None, :], Ka[None, :, :])
 
         # Elements that are switched off still own dofs; pin them so the
         # system stays non-singular without affecting the active soil.

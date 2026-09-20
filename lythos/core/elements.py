@@ -404,56 +404,105 @@ class InterfaceElements:
 
 @dataclass
 class AnchorProperties:
-    """Node-to-node anchor, strut or prop."""
+    """A strut, prop or ground anchor."""
 
     EA: float = 1.0e5        # axial rigidity [kN]
     spacing: float = 1.0     # out-of-plane spacing [m]
-    prestress: float = 0.0   # applied pre-stress force [kN]
-    Fmax: float = 0.0        # yield force [kN], 0 = unlimited
+    prestress: float = 0.0   # force locked in when the anchor is stressed [kN]
+    Fmax: float = 0.0        # capacity [kN], 0 = unlimited
     compression: bool = True  # False for a tension-only ground anchor
+    #: length of the fixed (grout) length at the far end [m].  The anchor load
+    #: is shared over the soil along it; tying a ground anchor to one node
+    #: instead lets the anchorage be dragged through the mesh and the
+    #: pre-stress simply bleeds away.
+    grout_length: float = 4.0
 
 
 class AnchorElements:
-    """Two-node bars connecting a structure to an anchorage point."""
+    """Bars connecting a structure to an anchorage in the soil.
 
-    def __init__(self, nodes: np.ndarray, pairs: list[tuple[int, int]],
-                 props: list[AnchorProperties]):
+    The near end attaches to a single node on the wall.  The far end is a
+    weighted set of nodes spanning the grout length, which spreads the
+    anchorage force into the soil the way a grouted bond length does.
+    """
+
+    def __init__(self, nodes: np.ndarray, anchors, props: list[AnchorProperties]):
         self.nodes = nodes
-        self.pairs = pairs
         self.props = props
-        self.force = np.zeros(len(pairs))
+        #: (near node, far node indices, far weights) for each anchor
+        self.anchors = anchors
+        #: force per anchor [kN] (not per metre of wall)
+        self.force = np.zeros(len(anchors))
+        #: strain locked in when the anchor was stressed, one per anchor
+        self.reference_strain = np.zeros(len(anchors))
 
     @property
     def n_elements(self) -> int:
-        return len(self.pairs)
+        return len(self.anchors)
 
-    def stiffness_and_force(self, u: np.ndarray):
-        ne = self.n_elements
-        Ke = np.zeros((ne, 4, 4))
-        Fe = np.zeros((ne, 4))
-        for e, (i, j) in enumerate(self.pairs):
+    @property
+    def pairs(self):
+        """Near and representative far node, for drawing."""
+        return [(near, far[int(np.argmax(w))]) for (near, far, w) in self.anchors]
+
+    def geometry(self, e: int):
+        """``(dofs, direction, length)`` of one anchor.
+
+        ``direction`` is the operator whose product with the nodal
+        displacements gives the elongation of the anchor.
+        """
+        near, far, weights = self.anchors[e]
+        d = (weights @ self.nodes[far]) - self.nodes[near]
+        L = float(np.hypot(*d))
+        if L < 1e-9:
+            return None, None, 0.0
+        t = d / L
+        dofs = np.array([2 * near, 2 * near + 1]
+                        + [v for n in far for v in (2 * n, 2 * n + 1)], dtype=np.int64)
+        direction = np.concatenate([[-t[0], -t[1]], np.outer(weights, t).ravel()])
+        return dofs, direction, L
+
+    def prestress_load(self, e: int) -> tuple[np.ndarray, np.ndarray] | None:
+        """External force pair equivalent to jacking the anchor to its lock-off load.
+
+        While an anchor is being stressed its force is what the jack sets, not
+        what the surrounding ground decides, so during that stage it acts as a
+        prescribed force rather than as an elastic bar.
+        """
+        p = self.props[e]
+        if not p.prestress:
+            return None
+        dofs, direction, _L = self.geometry(e)
+        if dofs is None:
+            return None
+        return dofs, -(p.prestress / max(p.spacing, 1e-9)) * direction
+
+    def set_reference(self, e: int, u: np.ndarray) -> None:
+        """Lock in the current length as the anchor's unstressed reference."""
+        dofs, direction, L = self.geometry(e)
+        if dofs is None:
+            return
+        self.reference_strain[e] = float(direction @ u[dofs]) / L
+
+    def contributions(self, u: np.ndarray, skip: set[int] | None = None):
+        """Yield ``(index, dofs, Ke, Fe)`` for each elastic anchor."""
+        for e, _spec in enumerate(self.anchors):
+            if skip and e in skip:
+                continue
             p = self.props[e]
-            d = self.nodes[j] - self.nodes[i]
-            L = float(np.hypot(*d))
-            t = d / L
-            B = np.array([-t[0], -t[1], t[0], t[1]]) / L
-            ue = np.array([u[2 * i], u[2 * i + 1], u[2 * j], u[2 * j + 1]])
-            k_ax = p.EA / max(p.spacing, 1e-9)       # rigidity per metre of wall
-            direction = np.array([-t[0], -t[1], t[0], t[1]])
-            force = k_ax * float(B @ ue) + p.prestress
+            dofs, direction, L = self.geometry(e)
+            if dofs is None:
+                continue
+            k_ax = p.EA / max(p.spacing, 1e-9)              # per metre of wall
+            locked = p.prestress / max(p.spacing, 1e-9)
+            strain = float(direction @ u[dofs]) / L - self.reference_strain[e]
+            force = k_ax * strain + locked                  # [kN per metre]
             stiff = k_ax / L
-            if p.Fmax and abs(force) > p.Fmax:       # yielded: cap the force
-                force = float(np.sign(force)) * p.Fmax
+            capacity = p.Fmax / max(p.spacing, 1e-9) if p.Fmax else 0.0
+            if capacity and abs(force) > capacity:          # capacity reached
+                force = float(np.sign(force)) * capacity
                 stiff *= 1e-4
-            if not p.compression and force < 0.0:    # ground anchor went slack
+            if not p.compression and force < 0.0:           # gone slack
                 force, stiff = 0.0, 1e-6 * k_ax / L
-            self.force[e] = force
-            Ke[e] = stiff * np.outer(direction, direction)
-            Fe[e] = force * direction
-        return Ke, Fe
-
-    def dofs(self) -> np.ndarray:
-        d = np.zeros((self.n_elements, 4), dtype=np.int64)
-        for e, (i, j) in enumerate(self.pairs):
-            d[e] = (2 * i, 2 * i + 1, 2 * j, 2 * j + 1)
-        return d
+            self.force[e] = force * max(p.spacing, 1e-9)    # report per anchor
+            yield e, dofs, stiff * np.outer(direction, direction), force * direction
