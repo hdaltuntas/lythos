@@ -10,6 +10,27 @@ non-zero even though the total strain there is zero, and because every yield
 criterion depends on it. Results reported to the user follow soil mechanics
 convention where that is clearer — `p'` is positive in compression.
 
+## Importing a drawing
+
+A section drawn in CAD is rarely one closed polygon per stratum. More often it
+is an outer boundary plus the lines that divide it, drawn as separate entities
+and sometimes on separate layers. Turning that into layers means recovering the
+faces of the planar subdivision those lines make
+(:mod:`lythos.core.topology`).
+
+Each vertex orders its incident edges by direction; walking a face means
+repeatedly taking the next edge clockwise from the one just arrived on. That
+traverses every bounded region counter-clockwise and the unbounded outer region
+clockwise, so discarding the negative-area walk leaves exactly the regions of
+the drawing. Dangling lines that enclose nothing are traversed in both
+directions and cancel.
+
+A region is named after a closed input outline when one traces it exactly -
+matched by area and centroid computed as polygon integrals, so that the match
+survives planarisation adding vertices along an edge. Otherwise the name is a
+guess from whichever drawing layer contributed most of the boundary, and the
+import report says which names were guessed.
+
 ## Discretisation
 
 Continuum elements are **6-node quadratic triangles** with three-point

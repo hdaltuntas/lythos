@@ -53,6 +53,35 @@ class Session:
         self.summary = None
         self.error = ""
 
+    # ----------------------------------------------------------------- drawings
+    def import_drawing(self, data: dict) -> dict:
+        """Build a model from the text of a DXF file."""
+        from ..dxf import ImportRules, build_model, parse_dxf
+
+        text = data.get("text", "")
+        if not text.strip():
+            return {"ok": False, "error": "the file was empty"}
+        if "\x00" in text[:2048]:
+            return {"ok": False, "error": (
+                "that is a binary DXF; re-export it as ASCII DXF, or import it "
+                "from the command line with ezdxf installed")}
+        rules = ImportRules()
+        if data.get("scale"):
+            rules.scale = float(data["scale"])
+        name = str(data.get("name", "drawing"))
+        drawing = parse_dxf(text, source=name)
+        if not drawing.entities:
+            return {"ok": False, "error": "no geometry was found in that file"}
+        model, report = build_model(drawing, rules=rules, name=name)
+        return {
+            "ok": True,
+            "model": model_to_dict(model),
+            "report": report.describe(),
+            "layers": len(model.layers),
+            "structures": len(model.structures),
+            "warnings": report.warnings,
+        }
+
     # ------------------------------------------------------------------ meshing
     def mesh(self, data: dict) -> dict:
         model = model_from_dict(data)
@@ -252,6 +281,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         route = urlparse(self.path).path
         try:
+            if route == "/api/import":
+                return self._json(SESSION.import_drawing(self._body()))
             if route == "/api/mesh":
                 return self._json(SESSION.mesh(self._body()))
             if route == "/api/run":

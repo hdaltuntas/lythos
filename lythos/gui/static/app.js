@@ -1067,6 +1067,48 @@ document.getElementById("btnExport").onclick = () => {
   setStatus("model saved", "ok");
 };
 
+document.getElementById("btnDxf").onclick = () => document.getElementById("dxfInput").click();
+document.getElementById("dxfInput").onchange = ev => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    setStatus("reading " + file.name + "…");
+    const reply = await post("/api/import", {
+      name: file.name.replace(/\.dxf$/i, ""), text: reader.result
+    });
+    if (reply.error || reply.ok === false) {
+      setStatus(reply.error || "could not read that drawing", "error");
+      return;
+    }
+    loadModel(reply.model);
+    showImportReport(reply);
+  };
+  reader.onerror = () => setStatus("could not read " + file.name, "error");
+  reader.readAsText(file);
+  ev.target.value = "";
+};
+
+function showImportReport(reply) {
+  const warnings = reply.warnings || [];
+  setStatus(`imported ${reply.layers} soil region(s) and ${reply.structures} `
+            + `structure(s)` + (warnings.length ? ` — ${warnings.length} note(s)` : ""),
+            warnings.length ? "" : "ok");
+  const body = document.getElementById("propsBody");
+  const box = document.createElement("div");
+  box.className = "derived";
+  box.style.whiteSpace = "pre-wrap";
+  box.textContent = reply.report;
+  const head = document.createElement("h2");
+  head.textContent = "Imported drawing";
+  const note = document.createElement("div");
+  note.className = "note";
+  note.textContent = "The drawing fixes the geometry only. Set each soil layer's "
+    + "properties and the construction stages before running.";
+  body.innerHTML = "";
+  body.append(head, note, box);
+}
+
 document.getElementById("btnImport").onclick = () => document.getElementById("fileInput").click();
 document.getElementById("fileInput").onchange = ev => {
   const file = ev.target.files[0];

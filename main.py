@@ -21,7 +21,7 @@ if HERE not in sys.path:
 
 #: what to do when no command is named
 DEFAULT_COMMAND = "gui"
-COMMANDS = ("run", "mesh", "gui", "examples")
+COMMANDS = ("run", "mesh", "gui", "examples", "import")
 
 REQUIRED = {
     "numpy": "python-numpy",

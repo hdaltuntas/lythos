@@ -24,6 +24,16 @@ def main(argv=None) -> int:
     mesh.add_argument("-o", "--out", default=None, help="write a mesh image here")
     mesh.add_argument("--mesh-size", type=float, default=None)
 
+    bring = sub.add_parser("import", help="build a model from a DXF drawing")
+    bring.add_argument("drawing", help="path to a .dxf file")
+    bring.add_argument("-o", "--out", default=None,
+                       help="model file to write (default: alongside the drawing)")
+    bring.add_argument("--scale", type=float, default=None,
+                       help="metres per drawing unit, overriding the file's own units")
+    bring.add_argument("--keep-coordinates", action="store_true",
+                       help="do not move the geometry to the origin")
+    bring.add_argument("--plot", default=None, help="write a picture of the geometry here")
+
     gui = sub.add_parser("gui", help="start the interactive interface in a browser")
     gui.add_argument("--port", type=int, default=8777)
     gui.add_argument("--host", default="127.0.0.1")
@@ -63,6 +73,31 @@ def main(argv=None) -> int:
             from .viz import plots
             plots.save(plots.plot_mesh(problem), args.out)
             print(f"mesh image written to {args.out}")
+        return 0
+
+    if args.command == "import":
+        import os
+
+        from .core.serialize import save_model
+        from .dxf import ImportRules, import_dxf
+
+        rules = ImportRules(scale=args.scale, shift_to_origin=not args.keep_coordinates)
+        stem = os.path.splitext(os.path.basename(args.drawing))[0]
+        model, report = import_dxf(args.drawing, rules=rules, name=stem)
+        print(report.describe())
+        out = args.out or os.path.splitext(args.drawing)[0] + ".json"
+        save_model(model, out)
+        print(f"\nmodel written to {out}")
+        if args.plot:
+            from .viz import plots
+            plots.save(plots.plot_model(model, title=stem), args.plot)
+            print(f"geometry drawn to {args.plot}")
+        if not model.layers:
+            print("\nNo soil was found, so the model cannot be analysed yet.",
+                  file=sys.stderr)
+            return 1
+        print("\nSoil properties and stages are at their defaults; set them in the "
+              "interface (lythos gui) or in the model file before analysing.")
         return 0
 
     if args.command == "gui":

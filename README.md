@@ -20,6 +20,8 @@ Lythos covers the analyses a geotechnical engineer runs in practice:
   pre-stressed ground anchors, struts and surcharge loads.
 - **Groundwater** — hydrostatic pore pressure below a phreatic surface, with
   the horizontal pressure gradient carried as a seepage force.
+- **DXF import** — read the section straight out of the CAD drawing instead of
+  retyping coordinates.
 
 Everything runs from an interactive interface in the browser, from the command
 line, or as a Python script.
@@ -69,6 +71,49 @@ analysis**.
 Nothing leaves your machine: the server listens on the loopback address only.
 The interface runs in a browser rather than a desktop toolkit so that it works
 the same over a remote session, in a container, or on a machine with no display.
+
+## Starting from a CAD drawing
+
+```bash
+python main.py import section.dxf -o section.json --plot section.png
+```
+
+Or press **Import DXF…** in the interface.
+
+![a section imported from a CAD drawing](docs/images/dxf_import.png)
+
+Which drawing layer becomes what is decided by its name, matched
+case-insensitively and ignoring hyphens, underscores and spaces, so
+`SU-SEVIYESI` and `su seviyesi` both read as the water table:
+
+| Drawing layer contains | becomes |
+| --- | --- |
+| `soil`, `clay`, `sand`, `rock`, `fill`, `zemin`, `kil`, `kum`, `tabaka`, … | a soil layer |
+| `wall`, `pile`, `sheet`, `diaphragm`, `perde`, `kazık`, … | a wall or pile row |
+| `water`, `phreatic`, `gwl`, `su seviyesi`, … | the water table |
+| `load`, `surcharge`, `yük`, … | a line load |
+| `anchor`, `strut`, `prop`, `ankraj`, … | an anchor |
+| `text`, `dim`, `hatch`, `grid`, `defpoints`, `ölçü`, … | ignored |
+| anything else | soil if the outline is closed, a structure if not |
+
+Soil regions are recovered as the faces of the planar arrangement the lines
+make, so **both usual CAD conventions work**: each stratum drawn as its own
+closed polyline, or one outer boundary plus the lines dividing it. Drawn the
+first way each region keeps its own layer name; drawn the second way names are
+guessed from whichever layer drew most of each boundary, and the import says
+so.
+
+Drawing units are read from `$INSUNITS`, so a section drawn in millimetres
+arrives in metres. Survey coordinates are moved to the origin, because the
+mesher's geometric tests lose precision out in the hundreds of thousands; the
+shift is reported so you can map results back.
+
+The drawing fixes the geometry and nothing else. Soil properties, section
+sizes, loads and construction stages are still yours to set afterwards.
+
+ASCII DXF is read directly, with no extra package. Install `ezdxf` if you also
+need binary DXF, splines or block references — it is used automatically when
+present.
 
 ## From a script
 
