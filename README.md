@@ -20,8 +20,8 @@ Lythos covers the analyses a geotechnical engineer runs in practice:
   pre-stressed ground anchors, struts and surcharge loads.
 - **Groundwater** — hydrostatic pore pressure below a phreatic surface, with
   the horizontal pressure gradient carried as a seepage force.
-- **DXF import** — read the section straight out of the CAD drawing instead of
-  retyping coordinates.
+- **DXF import** — read the section, *and its construction sequence*, straight
+  out of the CAD drawing instead of retyping coordinates.
 
 Everything runs from an interactive interface in the browser, from the command
 line, or as a Python script.
@@ -102,6 +102,50 @@ closed polyline, or one outer boundary plus the lines dividing it. Drawn the
 first way each region keeps its own layer name; drawn the second way names are
 guessed from whichever layer drew most of each boundary, and the import says
 so.
+
+### The construction sequence
+
+**A number at the end of a layer name is the step at which that thing
+happens.** That is the whole convention:
+
+| Layer | Meaning |
+| --- | --- |
+| `WALL-1` | the wall is built at step 1 |
+| `EXC-2`, `KAZI-2` | this region is dug out at step 2 |
+| `ANCHOR-3` | the anchor is stressed to its lock-off load at step 3 |
+| `SURCHARGE-1` | the load is applied at step 1 |
+| `SOIL-CLAY` | no number: present from the start, never removed |
+
+Excavation regions can be drawn either way too: as closed outlines of each
+lift, or as the dig **levels** drawn from the wall outwards, in which case the
+region each level cuts off from below is what comes out at that step. Walls
+take part in bounding those regions, which is what lets a level line drawn
+only across the excavation enclose anything.
+
+Try it on the drawing in the repository:
+
+```bash
+python main.py import examples/drawings/braced_excavation.dxf -o excavation.json
+```
+
+```
+step 1: build WALL-1; apply SURCHARGE-1
+step 2: excavate EXC-2
+step 3: stress ANCHOR-3
+step 4: excavate EXC-4
+step 5: stress ANCHOR-5
+step 6: excavate EXC-6
+```
+
+which becomes an eight-stage model: initial stresses, those six steps, and a
+factor of safety. Excavated regions are meshed like any other soil — they have
+to exist before they can be taken away — and each one leaves at its step and
+stays gone.
+
+![a staged excavation read from a drawing](docs/images/dxf_staged.png)
+
+Pass `--keep-coordinates` to leave survey coordinates alone, and see
+`ImportRules` for turning the step reading or the closing safety stage off.
 
 Drawing units are read from `$INSUNITS`, so a section drawn in millimetres
 arrives in metres. Survey coordinates are moved to the origin, because the

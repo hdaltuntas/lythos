@@ -357,6 +357,11 @@ DEFAULT_PATTERNS = {
               "yeraltisu", "yeraltısu"),
     "load": ("load", "surcharge", "yuk", "yük", "sürşarj", "sursarj"),
     "anchor": ("anchor", "ankraj", "strut", "prop", "tie", "destek", "payanda"),
+    # An excavation region or level.  Its geometry is soil like any other; what
+    # marks it out is that it is taken away, at the construction step given by
+    # the number in the layer name.
+    "excavation": ("exc", "kazi", "kazı", "lift", "dig", "kademe", "hafriyat",
+                   "remove", "kaldir", "kaldır"),
     "ignore": ("text", "yazi", "yazı", "dim", "olcu", "ölçü", "hatch", "tarama",
                "title", "antet", "grid", "aks", "defpoints", "frame", "cerceve"),
 }
@@ -380,6 +385,22 @@ class ImportRules:
     min_area: float = 1.0e-4
     #: what an unrecognised layer becomes: soil if closed, a structure if not
     fallback_by_shape: bool = True
+    #: read the trailing number in a layer name as the construction step at
+    #: which that thing happens: "KAZI-2" is excavated at step 2, "PERDE-1" is
+    #: built at step 1, "ANKRAJ-3" is stressed at step 3
+    read_steps: bool = True
+    #: add a strength reduction stage at the end of the sequence
+    add_safety_stage: bool = True
+
+    def step(self, layer: str) -> int | None:
+        """The construction step a layer name carries, if any."""
+        if not self.read_steps:
+            return None
+        match = re.search(r"(\d+)\s*$", layer.strip())
+        if not match:
+            return None
+        value = int(match.group(1))
+        return value if 1 <= value <= 99 else None
 
     def role(self, layer: str) -> str | None:
         """The role of a DXF layer.
@@ -391,7 +412,8 @@ class ImportRules:
         # Drawing layers separate words with hyphens, underscores or spaces
         # in no consistent way, so flatten them all before matching.
         name = re.sub(r"[\s_\-.]+", "", layer.strip().lower())
-        for role in ("ignore", "water", "anchor", "load", "structure", "soil"):
+        for role in ("ignore", "water", "anchor", "load", "excavation",
+                     "structure", "soil"):
             for pattern in self.patterns.get(role, ()):
                 if pattern in name:
                     return role
@@ -408,6 +430,8 @@ class ImportReport:
     roles: dict[str, str] = field(default_factory=dict)      # dxf layer -> role
     counts: dict[str, int] = field(default_factory=dict)     # role -> entities
     soil_layers: list[tuple[str, float]] = field(default_factory=list)
+    #: what happens at each construction step, in order
+    steps: list[tuple[int, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     def describe(self) -> str:
@@ -420,6 +444,8 @@ class ImportReport:
             lines.append(f"  layer {layer!r} -> {role}")
         for name, area in self.soil_layers:
             lines.append(f"  soil region {name!r}: {area:.2f} m2")
+        for number, what in self.steps:
+            lines.append(f"  step {number}: {what}")
         for warning in self.warnings:
             lines.append(f"  warning: {warning}")
         return "\n".join(lines)
@@ -440,8 +466,7 @@ def build_model(drawing: DxfDrawing, rules: ImportRules | None = None,
                 name: str | None = None):
     from .core.materials import MohrCoulomb
     from .core.mesher import PSLG, polygon_area
-    from .core.model import (Anchor, LineLoad, Model, SoilLayer, Stage, Structure,
-                             WaterTable)
+    from .core.model import Anchor, LineLoad, Model, SoilLayer, Structure, WaterTable
     from .core.elements import AnchorProperties
     from .core.pile import PileSection
     from .core.topology import find_faces, join_chains
@@ -485,7 +510,11 @@ def build_model(drawing: DxfDrawing, rules: ImportRules | None = None,
 
     # ------------------------------------------------------------ soil regions
     soil_layers: list[SoilLayer] = []
-    soil_entities = grouped.get("soil", [])
+    #: excavation geometry is soil like any other - it has to be meshed before
+    #: it can be taken away - so the two are gathered together, with the step
+    #: each excavation region belongs to kept alongside
+    soil_entities = grouped.get("soil", []) + grouped.get("excavation", [])
+    excavated_at: dict[str, int] = {}      # soil layer name -> step removed
     if soil_entities:
         pslg = PSLG()
         drawn: list[tuple[str, list[tuple[float, float]]]] = []
@@ -493,6 +522,15 @@ def build_model(drawing: DxfDrawing, rules: ImportRules | None = None,
             pts = place(entity.points)
             pslg.add_polyline(pts, marker=1, closed=entity.closed)
             drawn.append((entity.layer, pts + ([pts[0]] if entity.closed else [])))
+        # Walls bound regions too.  Excavation levels are usually drawn only
+        # across the dig, from the wall outwards, so without the wall in the
+        # arrangement they enclose nothing and the lifts never appear.  The
+        # wall contributes edges but no name: regions are still named after
+        # the soil that drew them.
+        for entity in grouped.get("structure", []):
+            wall = place(entity.points)
+            if len(wall) >= 2:
+                pslg.add_polyline(wall, marker=2, closed=entity.closed)
         # Planarising splits and renumbers everything, so which drawing layer a
         # segment came from has to be recovered from where it lies, not from
         # the indices it had beforehand.
@@ -504,6 +542,11 @@ def build_model(drawing: DxfDrawing, rules: ImportRules | None = None,
         # one bounded by shared lines can only be named by whichever layer drew
         # most of its boundary, which is a guess.
         closed_outlines = [(e.layer, place(e.points)) for e in soil_entities if e.closed]
+        # Excavation levels drawn as open lines rather than closed regions: the
+        # region they cut off from below is what comes out at that step.
+        levels = [(rules.step(e.layer), place(e.points))
+                  for e in grouped.get("excavation", [])
+                  if not e.closed and rules.step(e.layer)]
         guessed = False
         used_names: dict[str, int] = {}
         for face in faces:
@@ -519,21 +562,38 @@ def build_model(drawing: DxfDrawing, rules: ImportRules | None = None,
                 name=label, polygon=outline,
                 material=MohrCoulomb(name=label, color=_colour(len(soil_layers)))))
             report.soil_layers.append((label, area))
+
+            step = rules.step(base) if rules.role(base) == "excavation" else None
+            if step is None:
+                step = _level_step(outline, levels, rules.snap)
+            if step is not None:
+                excavated_at[label] = step
+        # A stratum cut up by the excavation regions drawn over it is the
+        # intended arrangement, not a mistake, so only report the cuts that
+        # something else made.
+        excavation_outlines = [place(e.points) for e in grouped.get("excavation", [])
+                               if e.closed and len(e.points) >= 3]
+        structure_paths = [place(e.points) for e in grouped.get("structure", [])
+                           if len(e.points) >= 2]
         subdivided = [layer for layer, outline in closed_outlines
                       if len(outline) >= 3
-                      and _matching_face(outline, faces, pslg.points, rules.snap) is None]
+                      and _matching_face(outline, faces, pslg.points, rules.snap) is None
+                      and not _cut_by_excavation(outline, excavation_outlines,
+                                                 structure_paths)]
         if subdivided:
             report.warnings.append(
                 "these closed outlines were cut into smaller regions, which "
                 "happens when they overlap one another or a line crosses them: "
                 + ", ".join(sorted(set(repr(s) for s in subdivided)))
                 + ". Check the drawing if that was not intended.")
-        if guessed and len(faces) > 1:
+        ambiguous = sorted(base for base, count in used_names.items() if count > 1)
+        if guessed and ambiguous:
             report.warnings.append(
-                "some soil regions are bounded by lines shared with their "
-                "neighbours, so their names are taken from whichever drawing "
-                "layer drew most of the boundary. Rename them once imported, or "
-                "draw each stratum as its own closed polyline.")
+                "more than one region ended up named after "
+                + ", ".join(repr(a) for a in ambiguous)
+                + ", because they are bounded by lines shared with their "
+                  "neighbours rather than by their own outline. Rename them "
+                  "once imported, or draw each region as its own closed polyline.")
         if not faces:
             report.warnings.append(
                 "no closed region was found in the soil layers; check that the "
@@ -592,6 +652,17 @@ def build_model(drawing: DxfDrawing, rules: ImportRules | None = None,
                                              material=MohrCoulomb(name=label)))
 
     names = [layer.name for layer in soil_layers]
+    stages, step_notes = _stages(soil_layers, excavated_at, structures, anchors, loads,
+                                 rules)
+    report.steps = step_notes
+    if excavated_at:
+        removed = sum(layer.area() for layer in soil_layers
+                      if layer.name in excavated_at)
+        report.warnings.append(
+            f"{len(excavated_at)} region(s), {removed:.1f} m2 in all, are "
+            "excavated by the end of the sequence. Check the stage list before "
+            "running: the drawing fixes what comes out and when, nothing else.")
+
     model = Model(
         name=name or "imported model",
         layers=soil_layers,
@@ -599,18 +670,74 @@ def build_model(drawing: DxfDrawing, rules: ImportRules | None = None,
         anchors=anchors,
         line_loads=loads,
         water=water,
-        stages=[
-            Stage("1 - initial stresses", kind="initial", active_layers=names,
-                  active_structures=[], active_anchors=[], active_loads=[]),
-            Stage("2 - construction", kind="plastic",
-                  active_structures=[s.name for s in structures],
-                  active_anchors=[a.name for a in anchors],
-                  active_loads=[l.name for l in loads]),
-        ],
+        stages=stages,
     )
     issues = model.validate()
     report.warnings.extend(issues)
     return model, report
+
+
+def _cut_by_excavation(outline, excavation_outlines, structures=()) -> bool:
+    """Whether something meant to divide this outline is drawn across it.
+
+    An excavation region drawn over a stratum, or a wall running through it,
+    subdivides it by design; only the cuts nothing accounts for are worth
+    reporting.
+    """
+    from .core.mesher import point_in_polygon
+
+    for other in excavation_outlines:
+        _area, centre = _polygon_area_and_centroid(other)
+        if point_in_polygon(centre[0], centre[1], outline):
+            return True
+    for path in structures:
+        if any(point_in_polygon(p[0], p[1], outline) for p in path):
+            return True
+    return False
+
+
+def _level_step(face, levels, tol: float) -> int | None:
+    """The step at which a region bounded below by an excavation level goes.
+
+    Digging works downwards, so the material taken out at a step is what sits
+    directly above that step's level.  A region is assigned to the level that
+    forms its floor: the highest one that runs below it and touches its
+    boundary.
+    """
+    if not levels:
+        return None
+    _area, centre = _polygon_area_and_centroid(face)
+    best: tuple[float, int] | None = None
+    for step, path in levels:
+        if not any(_on_path(_midpoint(face[i], face[(i + 1) % len(face)]), path, tol)
+                   for i in range(len(face))):
+            continue
+        elevation = _elevation_at(path, centre[0])
+        if elevation is None or elevation > centre[1]:
+            continue                      # the level is above: not this floor
+        if best is None or elevation > best[0]:
+            best = (elevation, step)
+    return None if best is None else best[1]
+
+
+def _midpoint(a, b):
+    return (0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]))
+
+
+def _elevation_at(path, x: float) -> float | None:
+    """Height of a polyline at a given x, or None where it does not reach."""
+    best = None
+    for a, b in zip(path[:-1], path[1:]):
+        lo, hi = min(a[0], b[0]), max(a[0], b[0])
+        if x < lo - 1e-9 or x > hi + 1e-9:
+            continue
+        if abs(b[0] - a[0]) < 1e-12:
+            y = max(a[1], b[1])
+        else:
+            t = (x - a[0]) / (b[0] - a[0])
+            y = a[1] + t * (b[1] - a[1])
+        best = y if best is None else max(best, y)
+    return best
 
 
 def _matching_face(outline, faces, points, tol: float):
@@ -687,6 +814,75 @@ def _on_path(point, path, tol: float) -> bool:
         if math.hypot(px - (a[0] + t * dx), py - (a[1] + t * dy)) <= tol:
             return True
     return False
+
+
+def _stages(soil_layers, excavated_at, structures, anchors, loads, rules):
+    """Build the construction sequence the drawing describes.
+
+    A step number in a layer name says when that thing happens: soil on
+    "KAZI-2" is dug out at step 2, a wall on "PERDE-1" is built at step 1, an
+    anchor on "ANKRAJ-3" is stressed at step 3.  Anything unnumbered is there
+    from the first step.
+    """
+    from .core.model import Stage
+
+    numbered_structures = {s.name: rules.step(s.name) for s in structures}
+    numbered_anchors = {a.name: rules.step(a.name) for a in anchors}
+    numbered_loads = {load.name: rules.step(load.name) for load in loads}
+
+    steps = sorted({n for n in list(excavated_at.values())
+                    + list(numbered_structures.values())
+                    + list(numbered_anchors.values())
+                    + list(numbered_loads.values()) if n})
+    all_names = [layer.name for layer in soil_layers]
+
+    def upto(mapping, n):
+        return [k for k, v in mapping.items() if v is None or v <= n]
+
+    notes: list[tuple[int, str]] = []
+    stages = [Stage("1 - initial stresses", kind="initial", active_layers=all_names,
+                    active_structures=[], active_anchors=[], active_loads=[])]
+    if not steps:
+        stages.append(Stage("2 - construction", kind="plastic",
+                            active_structures=[s.name for s in structures],
+                            active_anchors=[a.name for a in anchors],
+                            active_loads=[load.name for load in loads]))
+    else:
+        for n in steps:
+            gone = {k for k, v in excavated_at.items() if v <= n}
+            built = upto(numbered_structures, n)
+            stressed = upto(numbered_anchors, n)
+            applied = upto(numbered_loads, n)
+            what = _describe_step(n, excavated_at, numbered_structures,
+                                  numbered_anchors, numbered_loads)
+            notes.append((n, what))
+            stages.append(Stage(
+                f"{len(stages) + 1} - {what}", kind="plastic",
+                active_layers=[name for name in all_names if name not in gone],
+                active_structures=built, active_anchors=stressed,
+                active_loads=applied,
+                reset_displacements=(len(stages) == 1)))
+    if rules.add_safety_stage:
+        stages.append(Stage(f"{len(stages) + 1} - factor of safety", kind="ssr",
+                            srf_min=0.8, srf_max=3.0))
+    return stages, notes
+
+
+def _describe_step(n, excavated_at, structures, anchors, loads) -> str:
+    parts = []
+    built = sorted(k for k, v in structures.items() if v == n)
+    if built:
+        parts.append("build " + ", ".join(built))
+    stressed = sorted(k for k, v in anchors.items() if v == n)
+    if stressed:
+        parts.append("stress " + ", ".join(stressed))
+    applied = sorted(k for k, v in loads.items() if v == n)
+    if applied:
+        parts.append("apply " + ", ".join(applied))
+    dug = sorted(k for k, v in excavated_at.items() if v == n)
+    if dug:
+        parts.append("excavate " + ", ".join(dug))
+    return "; ".join(parts) if parts else f"step {n}"
 
 
 def _face_name(face, owners) -> str | None:

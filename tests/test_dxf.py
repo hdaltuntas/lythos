@@ -130,7 +130,7 @@ def test_an_outline_cut_by_a_line_becomes_two_layers():
     assert len(model.layers) == 2
     assert sum(layer.area() for layer in model.layers) == pytest.approx(270.0, rel=1e-9)
     assert model.validate() == []
-    assert any("names are taken from" in w for w in report.warnings)
+    assert any("more than one region ended up named" in w for w in report.warnings)
 
 
 def test_closed_outlines_keep_their_own_names():
@@ -141,7 +141,7 @@ def test_closed_outlines_keep_their_own_names():
                      closed=True))
     model, report = build_model(parse_dxf(text))
     assert sorted(layer.name for layer in model.layers) == ["ZEMIN-KIL", "ZEMIN-KUM"]
-    assert not any("names are taken from" in w for w in report.warnings)
+    assert not any("more than one region ended up named" in w for w in report.warnings)
     assert not any("cut into smaller regions" in w for w in report.warnings)
 
 
@@ -245,3 +245,116 @@ def test_join_chains_closes_a_boundary_drawn_as_separate_lines():
     chains, closed = join_chains(pieces)
     assert len(chains) == 1 and closed == [True]
     assert len(chains[0]) == 4
+
+
+# ------------------------------------------------------------------- staging
+@pytest.mark.parametrize("layer,step", [
+    ("KAZI-2", 2), ("EXC-1", 1), ("LIFT 3", 3), ("PERDE-1", 1),
+    ("ANKRAJ-10", 10), ("WALL", None), ("SOIL-CLAY", None), ("EXC-100", None),
+])
+def test_step_numbers_are_read_from_layer_names(layer, step):
+    assert ImportRules().step(layer) == step
+
+
+def _staged_drawing():
+    """A wall, two anchors and three lifts, each carrying its step number."""
+    W, R = 20, 60
+    return drawing(
+        lwpolyline("ZEMIN-KUM", [(0, 0), (R, 0), (R, 8), (0, 8)], closed=True)
+        + lwpolyline("ZEMIN-KIL", [(0, 8), (R, 8), (R, 22), (0, 22)], closed=True)
+        + lwpolyline("ZEMIN-DOLGU", [(0, 22), (R, 22), (R, 30), (0, 30)], closed=True)
+        + lwpolyline("KAZI-2", [(W, 27), (R, 27), (R, 30), (W, 30)], closed=True)
+        + lwpolyline("KAZI-4", [(W, 24), (R, 24), (R, 27), (W, 27)], closed=True)
+        + lwpolyline("KAZI-6", [(W, 22), (R, 22), (R, 24), (W, 24)], closed=True)
+        + lwpolyline("PERDE-1", [(W, 30), (W, 14)])
+        + line("ANKRAJ-3", (W, 28.5), (W - 12, 21))
+        + line("ANKRAJ-5", (W, 25.5), (W - 11, 18.5))
+        + lwpolyline("SURSARJ-1", [(2, 30), (16, 30)]))
+
+
+def test_a_staged_drawing_becomes_a_construction_sequence():
+    model, report = build_model(parse_dxf(_staged_drawing()))
+    kinds = [stage.kind for stage in model.stages]
+    assert kinds[0] == "initial" and kinds[-1] == "ssr"
+    assert [n for n, _what in report.steps] == [1, 2, 3, 4, 5, 6]
+
+    stages = model.resolved_stages()
+    # the wall is built and the surcharge applied first, before any digging
+    assert stages[1].active_structures == ["PERDE-1"]
+    assert stages[1].active_loads == ["SURSARJ-1"]
+    assert "KAZI-2" in stages[1].active_layers
+
+    # each lift leaves in its own step, and stays gone
+    gone_by = {}
+    for stage in stages:
+        for lift in ("KAZI-2", "KAZI-4", "KAZI-6"):
+            if lift not in stage.active_layers and lift not in gone_by:
+                gone_by[lift] = stage.name
+    assert set(gone_by) == {"KAZI-2", "KAZI-4", "KAZI-6"}
+    assert "excavate KAZI-2" in gone_by["KAZI-2"]
+
+    # anchors are stressed in order and stay stressed
+    stressed = [tuple(stage.active_anchors) for stage in stages]
+    assert ("ANKRAJ-3",) in stressed
+    assert ("ANKRAJ-3", "ANKRAJ-5") == stressed[-1]
+
+    # nothing that was dug out comes back
+    for earlier, later in zip(stages[1:-1], stages[2:]):
+        assert set(later.active_layers) <= set(earlier.active_layers)
+
+
+def test_excavated_regions_are_still_meshed():
+    """A lift has to exist in the mesh before it can be taken away."""
+    model, _report = build_model(parse_dxf(_staged_drawing()))
+    model.mesh_size = 4.0
+    for layer in model.layers:
+        layer.mesh_size = 4.0
+    problem = model.build()
+    total = sum(layer.area() for layer in model.layers)
+    assert problem.mesh.element_areas().sum() == pytest.approx(total, rel=1e-9)
+    assert total == pytest.approx(60 * 30, rel=1e-9)
+
+
+def test_excavation_levels_drawn_as_lines_also_work():
+    """The other convention: dig levels as lines, not as closed regions."""
+    text = drawing(
+        lwpolyline("ZEMIN", [(0, 0), (40, 0), (40, 20), (0, 20)], closed=True)
+        + lwpolyline("PERDE-1", [(20, 20), (20, 10)])
+        + lwpolyline("KAZI-2", [(20, 16), (40, 16)])
+        + lwpolyline("KAZI-3", [(20, 12), (40, 12)]))
+    model, report = build_model(parse_dxf(text))
+    assert [n for n, _w in report.steps] == [1, 2, 3]
+
+    stages = model.resolved_stages()
+    counts = [len(stage.active_layers) for stage in stages]
+    # one region leaves at step 2 and another at step 3
+    assert counts[1] > counts[2] > counts[3]
+    areas = {layer.name: layer.area() for layer in model.layers}
+    removed = set(stages[1].active_layers) - set(stages[3].active_layers)
+    assert sum(areas[name] for name in removed) == pytest.approx(
+        20 * 4 + 20 * 4, rel=1e-6)          # the two 20 x 4 m lifts
+
+
+def test_an_unstaged_drawing_keeps_the_simple_sequence():
+    text = drawing(lwpolyline("SOIL", [(0, 0), (10, 0), (10, 5), (0, 5)], closed=True)
+                   + lwpolyline("WALL", [(5, 5), (5, 1)]))
+    model, report = build_model(parse_dxf(text))
+    assert report.steps == []
+    assert [s.kind for s in model.stages] == ["initial", "plastic", "ssr"]
+    assert model.stages[1].active_structures == ["WALL"]
+
+
+def test_the_safety_stage_can_be_turned_off():
+    model, _report = build_model(parse_dxf(_staged_drawing()),
+                                 ImportRules(add_safety_stage=False))
+    assert "ssr" not in [stage.kind for stage in model.stages]
+
+
+def test_step_numbers_can_be_ignored():
+    model, report = build_model(parse_dxf(_staged_drawing()),
+                                ImportRules(read_steps=False))
+    assert report.steps == []
+    # every region stays present: nothing was read as an excavation
+    for stage in model.resolved_stages():
+        if stage.kind == "plastic":
+            assert "KAZI-2" in stage.active_layers

@@ -25,11 +25,33 @@ clockwise, so discarding the negative-area walk leaves exactly the regions of
 the drawing. Dangling lines that enclose nothing are traversed in both
 directions and cancel.
 
+Walls take part in the arrangement as boundaries without contributing a name.
+Excavation levels are drawn from the wall outwards, across the dig only, so
+without the wall in the arrangement they would enclose nothing and no lift
+would appear.
+
 A region is named after a closed input outline when one traces it exactly -
 matched by area and centroid computed as polygon integrals, so that the match
 survives planarisation adding vertices along an edge. Otherwise the name is a
 guess from whichever drawing layer contributed most of the boundary, and the
 import report says which names were guessed.
+
+### The construction sequence
+
+A number at the end of a layer name is the construction step at which that
+thing happens: soil on `EXC-2` is dug out at step 2, a wall on `WALL-1` is
+built at step 1, an anchor on `ANCHOR-3` is stressed at step 3. Anything
+unnumbered is present from the first step.
+
+Excavation regions given as levels rather than outlines are assigned by which
+level forms their floor: digging works downwards, so the material taken out at
+a step is what sits directly above that step's level. Among the levels that
+touch a region's boundary and run below its centroid, the highest is its floor.
+
+The stages follow: initial stresses, then one stage per step in which
+everything numbered at or below it is present, and finally a strength
+reduction stage. An excavated region is meshed like any other soil, since it
+has to exist before it can be taken away.
 
 ## Discretisation
 
