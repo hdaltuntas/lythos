@@ -40,7 +40,9 @@ def run_and_report(model: Model, out_dir: str = "out", fields=DEFAULT_FIELDS,
         print(f"mesh: {problem.continuum.n_elements} elements, "
               f"{problem.mesh.n_nodes} nodes, {problem.dofs.n_dof} degrees of freedom")
 
-    solver = Solver(problem, tolerance=tolerance)
+    # verbose prints each strength reduction trial as it finishes, which is
+    # what makes a long safety analysis legible rather than silent.
+    solver = Solver(problem, tolerance=tolerance, verbose=verbose)
     def progress(i, n, name):
         if verbose:
             print(f"  stage {i + 1}/{n}: {name}", flush=True)
