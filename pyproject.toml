@@ -20,3 +20,7 @@ include = ["lythos*"]
 
 [tool.setuptools.package-data]
 "lythos.gui" = ["static/*"]
+
+[tool.pytest.ini_options]
+markers = ["slow: analyses that take more than a few seconds"]
+testpaths = ["tests"]

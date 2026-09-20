@@ -60,6 +60,7 @@ class Solver:
         self._stressed: set[str] = set()                # anchors already jacked
         x0, y0, x1, y1 = problem.mesh.bounds()
         self._size = max(x1 - x0, y1 - y0, 1.0)          # model size, for step limits
+        self._has_contacts = any(st.interfaces for st in problem.structures)
 
     # ------------------------------------------------------------------ public
     def run(self, progress=None) -> list[StageResult]:
@@ -225,6 +226,18 @@ class Solver:
             for ie in st.interfaces:
                 ie.commit()
 
+    def _freeze_contacts(self, frozen: bool) -> None:
+        """Hold the stick/slip/open state of every interface point fixed.
+
+        A contact point that keeps switching state from one Newton iteration
+        to the next leaves a pair of equal and opposite residuals that no step
+        size can remove.  Freezing the set lets the iteration converge on it;
+        the next increment starts from a fresh set.
+        """
+        for st in self.p.structures:
+            for ie in st.interfaces:
+                ie.frozen = frozen
+
     # ----------------------------------------------------------------- newton
     def _newton(self, stage: Stage, active: np.ndarray, increments: int,
                 label: str, quiet: bool = False) -> StageResult:
@@ -288,6 +301,7 @@ class Solver:
             u_try = u_committed.copy()
             ok = False
             stalled = 0
+            self._freeze_contacts(False)
             for it in range(self.max_iterations):
                 f_int, K, state = self._internal(u_try, u_committed, state_committed, active,
                                                  active_structs, stage, tangent=True)
@@ -308,7 +322,11 @@ class Solver:
                                                     fixed, float(np.linalg.norm(r)))
                 if not improved:
                     stalled += 1
-                    if stalled >= 2:
+                    if stalled == 1 and self._has_contacts and not self._contacts_frozen():
+                        # First try holding the contact states: the stall is
+                        # usually points switching between sticking and sliding.
+                        self._freeze_contacts(True)
+                    elif stalled >= 3:
                         message = "the Newton step stopped reducing the imbalance"
                         break
                 else:
@@ -337,6 +355,7 @@ class Solver:
                     break
 
         converged_all = lam >= 1.0 - 1e-10
+        self._freeze_contacts(False)
         self._restore_structures(structures_committed)
         self._u = u_committed
         self._state = state_committed
@@ -356,6 +375,9 @@ class Solver:
                            active_structures=[s.name for s in active_structs],
                            active_anchors=list(stage.active_anchors or []),
                            iterations=logs, message=message)
+
+    def _contacts_frozen(self) -> bool:
+        return any(ie.frozen for st in self.p.structures for ie in st.interfaces)
 
     def _limit_step(self, du: np.ndarray) -> np.ndarray:
         """Cap a Newton step so one bad tangent cannot throw the solution away."""

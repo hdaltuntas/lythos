@@ -218,15 +218,20 @@ class BeamElements:
         return Ke, Fe
 
     def section_forces(self, u: np.ndarray, dof_map: np.ndarray):
-        """Axial force, shear force and bending moment at the element nodes.
+        """Axial force, shear force and bending moment along the member.
 
-        Returns ``(s, N, V, M)`` where ``s`` is the distance along the member.
+        Sampled at the reduced integration points rather than at the nodes.
+        The shear term is integrated at two points to avoid shear locking, so
+        that is where the shear strain is accurate; reading it at the nodes
+        instead produces a diagram that zigzags from element to element and
+        hides the real distribution.
         """
         sec = self.section
         out = []
+        stations = [xi for xi, _w in LINE_GAUSS_2]
         for e in range(self.n_elements):
             ue = u[dof_map[e]]
-            for xi in (-1.0, 0.0, 1.0):
+            for xi in stations:
                 N, dN, jac, t = self._geometry(e, xi)
                 n = np.array([-t[1], t[0]])
                 eps = sum(dN[a] / jac * (t[0] * ue[3 * a] + t[1] * ue[3 * a + 1]) for a in range(3))
@@ -286,6 +291,13 @@ class InterfaceElements:
         # per element, per Gauss point: [gap, slip, normal traction, shear traction]
         self.committed = np.zeros((n, 2, 4))
         self.trial = np.zeros((n, 2, 4))
+        #: contact state per Gauss point: 0 stuck, 1 sliding +, 2 sliding -, 3 open
+        self.mode = np.zeros((n, 2), dtype=np.int8)
+        #: when frozen, the contact states are held fixed.  Newton cannot
+        #: converge while points keep switching between sticking and sliding
+        #: from one iteration to the next, so the set is frozen once the
+        #: iteration stops making progress and released at the next increment.
+        self.frozen = False
 
     @property
     def n_elements(self) -> int:
@@ -294,12 +306,15 @@ class InterfaceElements:
     def commit(self) -> None:
         self.committed = self.trial.copy()
 
-    def snapshot(self) -> np.ndarray:
-        return self.committed.copy()
+    def snapshot(self):
+        return (self.committed.copy(), self.mode.copy())
 
-    def restore(self, state: np.ndarray) -> None:
-        self.committed = state.copy()
-        self.trial = state.copy()
+    def restore(self, state) -> None:
+        committed, mode = state if isinstance(state, tuple) else (state, self.mode)
+        self.committed = committed.copy()
+        self.trial = committed.copy()
+        self.mode = np.asarray(mode).copy()
+        self.frozen = False
 
     def tractions(self):
         """Normal and shear traction at each Gauss point, and its position."""
@@ -376,22 +391,29 @@ class InterfaceElements:
                     tn = tn_c + kn * (dn - dn_c)
                     ts = ts_c + ks * (ds - ds_c)
                     kn_eff, ks_eff = kn, ks
-                    if tn > p.tensile:                 # the gap has opened
+                    if self.frozen:
+                        mode = int(self.mode[e, g])
+                    elif tn > p.tensile:
+                        mode = 3
+                    else:
+                        limit = cohesion - tn * tan_phi
+                        mode = 0 if abs(ts) <= limit else (1 if ts > 0 else 2)
+                    self.mode[e, g] = mode
+
+                    if mode == 3:                      # the gap has opened
                         tn, ts = p.tensile, 0.0
                         kn_eff, ks_eff = residual * kn, residual * ks
-                    else:
+                    elif mode != 0:                    # sliding
+                        sign = 1.0 if mode == 1 else -1.0
                         tmax = cohesion - tn * tan_phi  # tn <= 0 in contact
-                        if abs(ts) > tmax:              # sliding
-                            sign = float(np.sign(ts))
-                            ts = sign * max(tmax, 0.0)
-                            ks_eff = residual * ks
-                            # While sliding the shear traction is set by the
-                            # normal traction, so the tangent needs the
-                            # coupling term d(tau)/d(sigma_n).  It is far
-                            # larger than the residual shear stiffness, and
-                            # leaving it out stalls the global iteration
-                            # however small the load step.
-                            coupling = -sign * tan_phi * kn
+                        ts = sign * max(tmax, 0.0)
+                        ks_eff = residual * ks
+                        # While sliding the shear traction is set by the
+                        # normal traction, so the tangent needs the coupling
+                        # term d(tau)/d(sigma_n).  It is far larger than the
+                        # residual shear stiffness, and leaving it out stalls
+                        # the global iteration however small the load step.
+                        coupling = -sign * tan_phi * kn
                 self.trial[e, g] = (dn, ds, tn, ts)
                 k += w * jac * (kn_eff * np.outer(Bn, Bn) + ks_eff * np.outer(Bs, Bs))
                 if coupling:
