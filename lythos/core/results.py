@@ -88,8 +88,13 @@ def structure_forces(problem: FEProblem, result: StageResult, name: str) -> dict
             continue
         if not s.beam.n_elements:
             break
-        # Section forces follow the displacement since installation.
-        u = result.displacement if s.u_reference is None else result.displacement
+        # A member is built into ground that has already moved, so its forces
+        # follow the displacement since it was installed - not the field the
+        # contours show, whose zero is wherever the user last reset it.
+        total = result.total_displacement
+        if total is None:
+            total = result.displacement
+        u = total if s.u_reference is None else total - s.u_reference
         raw = s.beam.section_forces(u, s.dof_map)
         if len(raw) == 0:
             break

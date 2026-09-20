@@ -28,6 +28,7 @@ class StageResult:
     name: str
     kind: str
     converged: bool
+    #: displacement since the last reset, which is what the contours show
     displacement: np.ndarray
     state: MaterialState
     active_elements: np.ndarray
@@ -38,6 +39,10 @@ class StageResult:
     iterations: list[IterationLog] = field(default_factory=list)
     message: str = ""
     seconds: float = 0.0
+    #: total displacement from the undeformed mesh.  Structural section forces
+    #: are measured from a member's own installation reference, not from the
+    #: display reset, so they need this rather than ``displacement``.
+    total_displacement: np.ndarray | None = None
     plastic_fraction: float = 0.0
     max_displacement: float = 0.0
     anchor_forces: dict[str, float] = field(default_factory=dict)
@@ -171,6 +176,9 @@ class Solver:
                 if srf >= stage.srf_max:
                     hi = stage.srf_max
                     break
+                # A trial that went through easily says the slope is still far
+                # from failing, so take a longer stride towards it.
+                step = min(1.5 * step, 0.5)
                 srf = min(srf + step, stage.srf_max)
             else:
                 hi = srf
@@ -206,7 +214,8 @@ class Solver:
         result = StageResult(name=stage.name, kind="ssr", converged=last_ok is not None,
                              displacement=self._u - reference_offset, state=self._state,
                              active_elements=active, srf=fos,
-                             srf_curve=sorted(curve), message=message)
+                             srf_curve=sorted(curve), message=message,
+                             total_displacement=self._u.copy())
         result.active_structures = list(stage.active_structures or [])
         result.active_anchors = list(stage.active_anchors or [])
         return result
@@ -291,7 +300,6 @@ class Solver:
         lam = 0.0
         dlam = 1.0 / max(increments, 1)
         min_dlam = dlam / 64.0
-        u = self._u.copy()
         cuts = 0
         scale_ref = max(np.linalg.norm(f_ext), 1e-8)
 
@@ -374,7 +382,8 @@ class Solver:
                            active_elements=active,
                            active_structures=[s.name for s in active_structs],
                            active_anchors=list(stage.active_anchors or []),
-                           iterations=logs, message=message)
+                           iterations=logs, message=message,
+                           total_displacement=self._u.copy())
 
     def _contacts_frozen(self) -> bool:
         return any(ie.frozen for st in self.p.structures for ie in st.interfaces)
@@ -432,7 +441,7 @@ class Solver:
         tangents = np.zeros((ce.n_points, 4, 4))
         new_state = state_committed.copy()
 
-        for mat, elems, gp in p.material_groups():
+        for mat, _elems, gp in p.material_groups():
             sub = MaterialState(state_committed.stress[gp], state_committed.plastic_strain[gp],
                                 state_committed.eps_p_eq[gp], state_committed.yielding[gp])
             s, t, ns = mat.update(sub, dstrain[gp])

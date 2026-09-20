@@ -7,7 +7,7 @@ format, so it is the one definition of what a Lythos model file contains.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, fields, is_dataclass
+from dataclasses import fields, is_dataclass
 
 from .elements import AnchorProperties, InterfaceProperties
 from .materials import Concrete, LinearElastic, Material, MohrCoulomb

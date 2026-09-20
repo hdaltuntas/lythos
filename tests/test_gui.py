@@ -7,7 +7,7 @@ import pytest
 
 from lythos.core.serialize import model_to_dict
 from lythos.examples import EXAMPLES
-from lythos.gui.server import Handler, Session
+from lythos.gui.server import Session
 
 
 def _pile_wall_quick():

@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .mesher import EXTERIOR, MeshGenerator, PSLG, Triangulation
+from .mesher import MeshGenerator, PSLG, Triangulation
 
 #: local corner pairs for each element edge, in node order
 EDGE_NODES = ((0, 1, 3), (1, 2, 4), (2, 0, 5))
@@ -182,7 +182,7 @@ def order_chain(edges: list[tuple[int, int, int]]) -> list[list[int]]:
         ends = [n for n, links in adj.items() if len(links) == 1]
         start = None
         for n in ends:
-            for (m, other) in adj[n]:
+            for (_mid, other) in adj[n]:
                 if (min(n, other), max(n, other)) in unused:
                     start = n
                     break

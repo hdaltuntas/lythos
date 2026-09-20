@@ -123,10 +123,21 @@ def test_slope_factor_of_safety_matches_limit_equilibrium():
 
 
 @pytest.mark.slow
-def test_factor_of_safety_is_not_sensitive_to_the_mesh():
-    coarse = Solver(_slope_model(3.0).build(), tolerance=2e-3).run()[-1].srf
-    fine = Solver(_slope_model(2.0).build(), tolerance=2e-3).run()[-1].srf
-    assert abs(coarse - fine) / fine < 0.05, (coarse, fine)
+def test_factor_of_safety_converges_downwards_as_the_mesh_is_refined():
+    """Refinement must reduce the factor of safety towards a limit.
+
+    A coarse mesh cannot resolve the shear band, so it makes the slope look
+    stronger than it is.  What matters is that refining moves the answer the
+    right way and that successive refinements change it by less and less - a
+    factor of safety that wandered with the mesh would not be usable.
+    """
+    values = [Solver(_slope_model(size).build(), tolerance=2e-3).run()[-1].srf
+              for size in (3.0, 2.5, 2.0)]
+    assert values[0] >= values[1] >= values[2], values
+    first_step = values[0] - values[1]
+    second_step = values[1] - values[2]
+    assert second_step <= first_step + 0.01, values
+    assert abs(values[1] - values[2]) / values[2] < 0.04, values
 
 
 def test_deactivating_a_layer_removes_its_weight():

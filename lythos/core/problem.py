@@ -8,12 +8,12 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .assembly import DofManager
-from .elements import (AnchorElements, AnchorProperties, BeamElements, ContinuumElements,
+from .elements import (AnchorElements, BeamElements, ContinuumElements,
                        InterfaceElements, InterfaceProperties, LINE_GAUSS_3, line3_shape)
-from .materials import MaterialState, Material, MohrCoulomb
+from .materials import MaterialState, Material
 from .mesh import Mesh, build_mesh, order_chain
 from .mesher import MeshGenerator, PSLG
-from .model import GAMMA_WATER, Model, WaterTable
+from .model import Model, WaterTable
 
 STRUCTURE_MARKER = 1000
 LOAD_MARKER = 5000

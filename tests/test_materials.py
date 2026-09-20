@@ -5,7 +5,7 @@ import math
 import numpy as np
 
 from lythos.core.materials import (
-    LinearElastic, MaterialState, MohrCoulomb, concrete_modulus, elastic_matrix,
+    MaterialState, MohrCoulomb, concrete_modulus, elastic_matrix,
     principal_stresses, from_principal,
 )
 

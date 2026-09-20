@@ -8,7 +8,6 @@ display.
 from __future__ import annotations
 
 import io
-import math
 
 import matplotlib
 matplotlib.use("Agg")
@@ -76,7 +75,6 @@ def plot_mesh(problem: FEProblem, ax=None, show_layers: bool = True,
     with plt.rc_context(PLOT_STYLE):
         if ax is None:
             _fig, ax = plt.subplots(figsize=(9, 5))
-        nodes = problem.mesh.nodes
         tri = _triangulation(problem)
         if show_layers:
             colors = [getattr(lay.material, "color", "#c8b273") for lay in problem.model.layers]

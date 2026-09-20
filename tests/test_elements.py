@@ -1,6 +1,5 @@
 """Element formulations: patch tests and closed-form structural checks."""
 
-import math
 
 import numpy as np
 import pytest

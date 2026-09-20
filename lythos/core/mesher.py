@@ -296,7 +296,6 @@ class Triangulation:
             t = next(i for i in range(len(self.tris)) if self.tris[i] is not None)
         previous = -1
         for _ in range(16 * len(self.tris) + 64):
-            tri = self.tris[t]
             moved = False
             offset = self._rng.randrange(3)
             for kk in range(3):
@@ -338,7 +337,6 @@ class Triangulation:
         return t
 
     def _contains(self, t, p) -> bool:
-        tri = self.tris[t]
         for k in range(3):
             a, b = self.edge_of(t, k)
             pa, pb = self.verts[a], self.verts[b]
@@ -760,7 +758,7 @@ class MeshGenerator:
                 T.tags[t] = EXTERIOR
         self._area_limit: dict[int, float] = {}
 
-        for (tag, outline, area) in self.pslg.polygons:
+        for (tag, _outline, area) in self.pslg.polygons:
             if area and area > 0:
                 self._area_limit[int(tag)] = float(area)
         if self.pslg.polygons:
