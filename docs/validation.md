@@ -129,6 +129,25 @@ capacity of the section. The largest movement is 72 mm of heave at the base of
 the excavation, not wall deflection — which is what a heavily propped wall in
 stiff clay should do.
 
+## Staged embankment
+
+The embankment example — 6 m of fill raised in three lifts over 8 m of soft
+clay (su = 32 kPa) on stiff clay (su = 75 kPa) — settles 33.5, 67.6 and
+105.4 mm through the three lifts, with plastic points spreading from 8% to 21%
+of the soil. Strength reduction on the completed embankment reports 1.61.
+
+**That factor of safety is not independently checked.** A Bishop search over
+circular surfaces gives 2.13, but its minimum sits against the edge of the
+search box, so it is an upper bound on the best circle rather than the best
+circle; and the strip bearing bound `(2 + pi) su / q = 1.37` ignores both the
+spread of a trapezoidal load and the side slopes, so it is not the right
+comparison either. The finite element value falls between the two, which is
+where it should be, but "between two bounds that are each wrong in a known
+direction" is not validation. Treat it as an illustration of staged
+construction, not as a verified number.
+
+The slope benchmark above is the one that is properly checked.
+
 ## Known weaknesses
 
 - **Volumetric locking under undrained conditions.** With `phi = 0` the plastic
@@ -145,6 +164,7 @@ stiff clay should do.
 ## What has *not* been validated
 
 - No comparison against measured field data.
+- The embankment factor of safety, for the reason given above.
 - No comparison against another commercial finite element program.
 - Consolidation, transient flow and large displacement are not implemented at
   all, so there is nothing to validate.

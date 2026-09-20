@@ -62,6 +62,7 @@ class Solver:
         self._state = MaterialState.zeros(problem.continuum.n_points)
         self._u_offset = np.zeros(problem.dofs.n_dof)   # displacements reset by a stage
         self._installed: set[str] = set()               # structures already built
+        self._progress = None                           # reported per stage and per trial
         self._stressed: set[str] = set()                # anchors already jacked
         x0, y0, x1, y1 = problem.mesh.bounds()
         self._size = max(x1 - x0, y1 - y0, 1.0)          # model size, for step limits
@@ -70,6 +71,7 @@ class Solver:
     # ------------------------------------------------------------------ public
     def run(self, progress=None) -> list[StageResult]:
         stages = self.p.model.resolved_stages()
+        self._progress = progress
         for i, stage in enumerate(stages):
             if progress:
                 progress(i, len(stages), stage.name)
@@ -145,6 +147,8 @@ class Solver:
         reference_offset = self._u_offset.copy()
 
         curve: list[tuple[float, float]] = []
+        trials: list[tuple[float, bool, float, float, int]] = []
+        successful_iterations: list[int] = []
         anchor_u, anchor_state = base_u.copy(), base_state.copy()
         anchor_structures = base_structures
         best_u, best_state = base_u.copy(), base_state.copy()
@@ -154,11 +158,27 @@ class Solver:
             self._u = warm_u.copy()
             self._state = warm_state.copy()
             self._restore_structures(warm_structures)
+            started = time.time()
+            # A trial that has already taken many times the work of the
+            # successful ones is at failure; spending the rest of the
+            # sub-stepping ladder on it only confirms that slowly.
+            budget = max(200, 8 * max(successful_iterations, default=25))
             res = self._newton(stage, active, increments=max(stage.increments, 6),
-                               label=f"SRF {srf:.3f}")
+                               label=f"SRF {srf:.3f}", budget=budget)
+            if res.converged:
+                successful_iterations.append(len(res.iterations))
             disp = (self._u - reference_offset)[: 2 * self.p.mesh.n_nodes].reshape(-1, 2)
             dmax = float(np.max(np.hypot(disp[:, 0], disp[:, 1]))) if len(disp) else 0.0
             curve.append((srf, dmax))
+            trials.append((srf, res.converged, dmax, time.time() - started,
+                           len(res.iterations)))
+            if self.verbose:
+                print(f"      trial SRF {srf:.3f}: "
+                      f"{'equilibrium found' if res.converged else 'no equilibrium'}, "
+                      f"{1000 * dmax:.1f} mm, {len(res.iterations)} iterations, "
+                      f"{time.time() - started:.1f} s", flush=True)
+            if self._progress:
+                self._progress(-1, 0, f"{stage.name}: trial factor {srf:.2f}")
             return res.converged, dmax
 
         # 1. march upwards from the lower bound until equilibrium is lost
@@ -249,7 +269,7 @@ class Solver:
 
     # ----------------------------------------------------------------- newton
     def _newton(self, stage: Stage, active: np.ndarray, increments: int,
-                label: str, quiet: bool = False) -> StageResult:
+                label: str, budget: int | None = None) -> StageResult:
         p = self.p
         water = stage.water or p.model.water
         fixed = p.fixed_dofs
@@ -300,10 +320,18 @@ class Solver:
         lam = 0.0
         dlam = 1.0 / max(increments, 1)
         min_dlam = dlam / 64.0
+        # Once a step size has failed there is no point growing back to it and
+        # walking into the same wall again, which is what made a doomed
+        # strength reduction trial cost ten times a successful one.
+        dlam_ceiling = 1.0 / max(increments, 1)
         cuts = 0
         scale_ref = max(np.linalg.norm(f_ext), 1e-8)
 
         while lam < 1.0 - 1e-10:
+            if budget is not None and len(logs) > budget:
+                message = (f"gave up after {len(logs)} iterations at "
+                           f"{lam * 100:.0f}% of the stage load")
+                break
             trial = min(1.0, lam + dlam)
             target = f_int0 + trial * (f_ext - f_int0)
             u_try = u_committed.copy()
@@ -351,10 +379,11 @@ class Solver:
                 u_committed = u_try
                 state_committed = state
                 lam = trial
-                if it < 6 and dlam < 1.0 / max(increments, 1):
-                    dlam = min(2.0 * dlam, 1.0 / max(increments, 1))
+                if it < 6 and dlam < dlam_ceiling:
+                    dlam = min(2.0 * dlam, dlam_ceiling)
             else:
                 self._restore_structures(structures_committed)
+                dlam_ceiling = min(dlam_ceiling, 0.5 * dlam)
                 dlam *= 0.5
                 cuts += 1
                 if dlam < min_dlam or cuts > 20:
