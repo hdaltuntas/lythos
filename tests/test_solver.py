@@ -88,17 +88,18 @@ def test_earth_pressure_at_rest_follows_k0():
 
 
 def _slope_model(mesh_size=2.5):
-    soil = MohrCoulomb(name="soil", E=1.0e5, nu=0.3, c=10.0, phi=20.0, psi=0.0, gamma=20.0)
-    outline = [(0, 0), (40, 0), (40, 10), (25, 10), (5, 0)]
-    return Model(
-        name="benchmark slope",
-        layers=[SoilLayer("soil", outline, soil, mesh_size=mesh_size)],
-        stages=[
-            Stage("initial", kind="initial", increments=10),
-            Stage("safety", kind="ssr", increments=10, srf_min=0.8, srf_max=2.5),
-        ],
-        initial_stress="gravity",
-    )
+    """The shipped slope example at a chosen element size.
+
+    Using the example itself keeps the numbers in the validation notes and the
+    numbers this test checks from drifting apart.
+    """
+    from lythos.examples import slope
+
+    model = slope()
+    model.mesh_size = mesh_size
+    for layer in model.layers:
+        layer.mesh_size = mesh_size
+    return model
 
 
 @pytest.mark.slow

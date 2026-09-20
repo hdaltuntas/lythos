@@ -29,7 +29,7 @@ def slope() -> Model:
     """
     soil = MohrCoulomb(name="silty clay", E=1.0e5, nu=0.3, c=10.0, phi=20.0, psi=0.0,
                        gamma=20.0, gamma_sat=21.0, color="#b9a878")
-    outline = [(0, 0), (40, 0), (40, 10), (25, 10), (5, 0)]
+    outline = [(5, 0), (40, 0), (40, 10), (25, 10)]
     return Model(
         name="cut slope factor of safety",
         layers=[SoilLayer("silty clay", outline, soil, mesh_size=2.0)],
@@ -46,13 +46,20 @@ def slope() -> Model:
 def embankment() -> Model:
     """A road embankment raised in three lifts over soft clay.
 
-    Staged filling on a soft foundation is the case where construction
-    sequence matters most: each lift consolidates nothing here, so the
-    analysis shows the undrained response and the stability that goes with it.
+    Staged filling on a soft foundation is the case where the construction
+    sequence matters most.  There is no consolidation here, so every lift is
+    carried by the undrained strength the clay already has - the conservative
+    reading, and the one that decides whether the next lift can go on.
+
+    Six metres of fill at 20 kN/m3 puts about 120 kPa on the clay against an
+    undrained bearing capacity of roughly (2 + pi) su = 165 kPa, so the
+    embankment stands at full height with something in hand.  Drop su much
+    below 25 kPa and it will not: the analysis then reports that no
+    equilibrium exists for the last lift, which is the right answer.
     """
-    soft = MohrCoulomb(name="soft clay", E=4.0e3, nu=0.35, c=18.0, phi=0.0, psi=0.0,
-                       gamma=16.0, gamma_sat=16.5, K0=0.9, color="#9aa7a0")
-    stiff = MohrCoulomb(name="stiff clay", E=3.0e4, nu=0.3, c=45.0, phi=0.0, psi=0.0,
+    soft = MohrCoulomb(name="soft clay", E=8.0e3, nu=0.35, c=32.0, phi=0.0, psi=0.0,
+                       gamma=16.5, gamma_sat=17.0, K0=0.9, color="#9aa7a0")
+    stiff = MohrCoulomb(name="stiff clay", E=3.0e4, nu=0.3, c=75.0, phi=0.0, psi=0.0,
                         gamma=19.0, gamma_sat=19.5, K0=0.8, color="#7d8a83")
     fill = MohrCoulomb(name="granular fill", E=3.0e4, nu=0.3, c=1.0, phi=34.0, psi=4.0,
                        gamma=20.0, gamma_sat=21.0, color="#d2b48c")

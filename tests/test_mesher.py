@@ -123,3 +123,35 @@ def test_smaller_target_size_gives_more_elements():
         p.polygons.append((0, outline, 0.5 * size * size))
         counts.append(build_mesh(_mesh(p)).n_elements)
     assert counts[0] < counts[1] < counts[2]
+
+
+def test_a_sharp_input_corner_does_not_produce_degenerate_elements():
+    """Two lines meeting at a sharp angle must not send refinement runaway.
+
+    Ruppert refinement splits the two segments at such a corner against each
+    other without end unless the splitting is bounded, leaving elements many
+    orders of magnitude smaller than the rest and a stiffness matrix to match.
+    """
+    p = PSLG()
+    # a wedge: the two long edges meet at about 18 degrees
+    outline = [(0, 0), (60, 0), (40, 6.5)]
+    p.add_polyline(outline, marker=1, closed=True)
+    p.polygons.append((0, outline, 2.0))
+    mesh = build_mesh(_mesh(p))
+    areas = mesh.element_areas()
+    assert areas.sum() == pytest.approx(abs(polygon_area(outline)), rel=1e-9)
+    assert areas.min() > 1e-5 * areas.max(), (areas.min(), areas.max())
+    assert areas.min() > 0
+
+
+def test_a_zero_width_lobe_is_discarded():
+    """A polygon that doubles back on itself must not leave sliver elements."""
+    p = PSLG()
+    # the run from (5, 0) back to (0, 0) is collinear with the base: no area
+    outline = [(0, 0), (40, 0), (40, 10), (25, 10), (5, 0)]
+    p.add_polyline(outline, marker=1, closed=True)
+    p.polygons.append((0, outline, 2.0))
+    mesh = build_mesh(_mesh(p))
+    areas = mesh.element_areas()
+    assert areas.sum() == pytest.approx(250.0, rel=1e-9)
+    assert areas.min() > 1e-6 * areas.max()

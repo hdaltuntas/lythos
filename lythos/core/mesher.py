@@ -587,11 +587,23 @@ class Triangulation:
 
     # ------------------------------------------------------------------ output
     def interior_triangles(self):
+        """Real elements of the domain.
+
+        Slivers of negligible area are dropped.  They appear where two
+        boundary segments meet almost collinearly - a polygon with a
+        zero-width lobe, say, which is easy to draw by accident - and an
+        element of 1e-14 m2 in a domain of hundreds contributes nothing but a
+        ruinous condition number.
+        """
+        span = max(self.bbox[2] - self.bbox[0], self.bbox[3] - self.bbox[1], 1e-12)
+        floor = 1e-12 * span * span
         out = []
         for t, tri in enumerate(self.tris):
             if tri is None or self.tags[t] == EXTERIOR:
                 continue
             if any(self.is_super(v) for v in tri):
+                continue
+            if _tri_area(*[self.verts[v] for v in tri]) <= floor:
                 continue
             out.append(t)
         return out
@@ -627,12 +639,20 @@ class MeshGenerator:
     """Delaunay refinement mesher."""
 
     def __init__(self, pslg: PSLG, min_angle: float = 25.0, max_area: float | None = None,
-                 max_points: int = 200_000):
+                 max_points: int = 200_000, min_length_ratio: float = 0.05):
         self.pslg = pslg
         self.min_angle = min_angle
         self.max_area = max_area
         self.max_points = max_points
         self.quality_bound = 1.0 / (2.0 * math.sin(math.radians(min_angle)))
+        #: shortest subsegment the refinement may create, as a fraction of the
+        #: target element size.  Where two boundary lines meet at a sharp
+        #: angle - the toe of a slope, the shoulder of an embankment -
+        #: refinement otherwise splits the two segments against each other
+        #: without end, leaving elements millions of times smaller than the
+        #: rest and a stiffness matrix to match.
+        self.min_length_ratio = min_length_ratio
+        self.min_length = 0.0
 
     def run(self) -> Triangulation:
         p = self.pslg
@@ -651,10 +671,25 @@ class MeshGenerator:
         for key in T.subsegs:
             self._index_segment(T, key)
 
+        self._set_minimum_length()
         self._recover_segments(T)
         self._label_regions(T)
         self._refine(T)
         return T
+
+    def _set_minimum_length(self) -> None:
+        """Smallest subsegment the mesher may create."""
+        areas = [a for (_tag, _outline, a) in self.pslg.polygons if a and a > 0]
+        areas += [a for (_x, _y, _tag, a) in self.pslg.regions if a and a > 0]
+        if self.max_area and self.max_area > 0:
+            areas.append(self.max_area)
+        if areas:
+            target = math.sqrt(2.0 * min(areas))
+        else:
+            xs = [p[0] for p in self.pslg.points]
+            ys = [p[1] for p in self.pslg.points]
+            target = max(max(xs) - min(xs), max(ys) - min(ys), 1.0) / 40.0
+        self.min_length = self.min_length_ratio * target
 
     # --------------------------------------------------------------- segments
     def _index_segment(self, T, key):
@@ -671,9 +706,16 @@ class MeshGenerator:
             self.grid.remove(sid)
             self._sid_key.pop(sid, None)
 
-    def _split_segment(self, T, key) -> int:
-        """Split a subsegment at its midpoint and insert the new vertex."""
+    def _split_segment(self, T, key, limit: bool = True):
+        """Split a subsegment at its midpoint and insert the new vertex.
+
+        Returns the new vertex, or None when the subsegment is already at the
+        shortest length refinement is allowed to create.
+        """
         i, j = key
+        if limit and self.min_length > 0.0:
+            if math.dist(T.verts[i], T.verts[j]) < self.min_length:
+                return None
         marker = T.subsegs.pop(key)
         self._drop_segment(key)
         a, b = T.verts[i], T.verts[j]
@@ -711,7 +753,7 @@ class MeshGenerator:
             todo = [k for k in T.subsegs if k not in edges]
             for key in todo:
                 if key in T.subsegs:
-                    self._split_segment(T, key)
+                    self._split_segment(T, key, limit=False)
             pending = []
             for key in list(T.subsegs):
                 a, b = T.verts[key[0]], T.verts[key[1]]
@@ -721,10 +763,13 @@ class MeshGenerator:
                     if _encroached(a, b, v):
                         pending.append(key)
                         break
+            split_any = False
             for key in pending:
-                if key in T.subsegs:
-                    self._split_segment(T, key)
-            if not todo and not pending:
+                if key in T.subsegs and self._split_segment(T, key) is not None:
+                    split_any = True
+            if not todo and not split_any:
+                # Either nothing was encroached, or what was is already as
+                # short as the input geometry allows.
                 return
 
     # ---------------------------------------------------------------- regions
@@ -836,9 +881,15 @@ class MeshGenerator:
                 continue
             keys = self._encroached_by(T, cc)
             if keys:
+                split_any = False
                 for key in keys:
-                    if key in T.subsegs:
-                        self._split_segment(T, key)
+                    if key in T.subsegs and self._split_segment(T, key) is not None:
+                        split_any = True
+                if not split_any:
+                    # Every encroached segment is already as short as it is
+                    # allowed to get: this triangle is as good as the input
+                    # geometry permits.
+                    continue
                 queue.append(t)
                 queue.extend(range(max(0, len(T.tris) - 12), len(T.tris)))
                 continue
