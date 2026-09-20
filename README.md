@@ -101,6 +101,11 @@ The concrete modulus comes from EN 1992-1-1 (`Ecm = 22000 (fcm/10)^0.3` MPa).
 All structural output is per metre run of wall; divide by the spacing for the
 force in one pile.
 
+![axial force, shear and bending moment in the wall](docs/images/wall_forces.png)
+
+The steps in the shear diagram are at the anchor levels, where a point load
+enters the wall.
+
 ## What is inside
 
 | Part | What it does |
@@ -152,6 +157,11 @@ Worth knowing before trusting a number to a design:
   chosen for the stress range that matters.
 - A row of piles is smeared into an equivalent plate, which is the usual
   plane-strain idealisation; it says nothing about arching between the piles.
+- Quadratic triangles are much better than linear ones under constant-volume
+  plastic flow, but they are not immune to volumetric locking. Undrained
+  (`phi = 0`) collapse loads are therefore slightly on the high side and get
+  slower to converge as the plastic zone spreads. Refine, and treat an
+  undrained factor of safety from a coarse mesh with particular suspicion.
 - Strength reduction reports the factor at which equilibrium is lost. Like any
   such analysis it is sensitive to how the failure criterion is judged, so the
   displacement-versus-factor curve is reported alongside it and should be

@@ -64,12 +64,16 @@ def embankment() -> Model:
     fill = MohrCoulomb(name="granular fill", E=3.0e4, nu=0.3, c=1.0, phi=34.0, psi=4.0,
                        gamma=20.0, gamma_sat=21.0, color="#d2b48c")
 
+    # Element sizes here are chosen so the whole sequence, strength reduction
+    # included, runs in a couple of minutes.  Refine before trusting the
+    # factor of safety: a coarse mesh cannot resolve the shear band through
+    # the soft layer and reports the embankment stronger than it is.
     layers = [
-        SoilLayer("stiff clay", [(0, 0), (80, 0), (80, 6), (0, 6)], stiff, mesh_size=4.0),
-        SoilLayer("soft clay", [(0, 6), (80, 6), (80, 14), (0, 14)], soft, mesh_size=2.0),
-        SoilLayer("lift 1", [(0, 14), (46, 14), (40, 16), (0, 16)], fill, mesh_size=1.5),
-        SoilLayer("lift 2", [(0, 16), (40, 16), (34, 18), (0, 18)], fill, mesh_size=1.5),
-        SoilLayer("lift 3", [(0, 18), (34, 18), (28, 20), (0, 20)], fill, mesh_size=1.5),
+        SoilLayer("stiff clay", [(0, 0), (80, 0), (80, 6), (0, 6)], stiff, mesh_size=6.0),
+        SoilLayer("soft clay", [(0, 6), (80, 6), (80, 14), (0, 14)], soft, mesh_size=3.0),
+        SoilLayer("lift 1", [(0, 14), (46, 14), (40, 16), (0, 16)], fill, mesh_size=2.0),
+        SoilLayer("lift 2", [(0, 16), (40, 16), (34, 18), (0, 18)], fill, mesh_size=2.0),
+        SoilLayer("lift 3", [(0, 18), (34, 18), (28, 20), (0, 20)], fill, mesh_size=2.0),
     ]
     names = [lay.name for lay in layers]
     ground = names[:2]
@@ -86,7 +90,7 @@ def embankment() -> Model:
             Stage("4 - third lift", kind="plastic", active_layers=names, increments=10),
             Stage("5 - factor of safety", kind="ssr", increments=10, srf_min=0.8, srf_max=3.0),
         ],
-        mesh_size=3.0,
+        mesh_size=4.0,
         initial_stress="k0",
     )
 

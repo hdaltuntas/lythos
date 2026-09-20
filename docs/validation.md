@@ -120,12 +120,27 @@ of 1.0 m piles at 1.2 m centres, two rows of pre-stressed anchors — produces:
 | stress row 1, dig to 6 m | −1.3 | 164 | 350 | — |
 | stress row 2, dig to 8 m | 1.3 | 219 | 306 | 450 |
 
+![displacements at the final excavation stage](images/excavation_disp.png)
+
 Each anchor reaches exactly its lock-off load in the stage it is stressed and
 then relaxes as the dig continues, the wall top is held within a couple of
 millimetres once propped, and the moment stays at 17% of the 1257 kNm/m
 capacity of the section. The largest movement is 72 mm of heave at the base of
 the excavation, not wall deflection — which is what a heavily propped wall in
 stiff clay should do.
+
+## Known weaknesses
+
+- **Volumetric locking under undrained conditions.** With `phi = 0` the plastic
+  flow preserves volume exactly, and the quadratic triangle is then stiffer than
+  it should be. Undrained collapse loads are slightly high and the iteration
+  slows as the plastic zone spreads, which is why the embankment example takes
+  minutes where the drained excavation takes seconds.
+- **Coarse-mesh strength reduction is unconservative**, as the convergence table
+  above shows.
+- **A point anchorage is a modelling fiction.** The grout body spreads the load
+  over the fixed length, but the bond stress distribution it assumes is a
+  triangular approximation, not a pull-out analysis.
 
 ## What has *not* been validated
 

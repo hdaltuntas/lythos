@@ -18,6 +18,13 @@ flows plastically at constant volume they lock badly and overestimate collapse
 loads, which would corrupt the factor of safety that the whole program exists to
 compute.
 
+Quadratic triangles are far better in that regime but not immune to it. With
+`phi = 0` and `psi = 0` the plastic flow is exactly volume preserving, and the
+element is then stiffer than it should be: undrained collapse loads come out
+slightly high, and the iteration slows as the plastic zone spreads. A B-bar or
+mixed formulation, or the 15-node triangle other codes use for this reason,
+would remove it; neither is implemented here.
+
 The mesh comes from a Delaunay refinement mesher (`lythos.core.mesher`):
 
 1. The drawing is planarised — every crossing and every T-junction between the
@@ -34,6 +41,18 @@ The mesh comes from a Delaunay refinement mesher (`lythos.core.mesher`):
    several disconnected pieces.
 5. Refinement to a minimum angle and to per-region target sizes, splitting
    encroached segments in preference to inserting circumcentres.
+
+Segment splitting is bounded below by a fraction of the target element size.
+Without that bound, two boundary lines meeting at a sharp angle - the toe of a
+slope, the shoulder of an embankment - send the refinement splitting the two
+segments against each other without end, leaving elements orders of magnitude
+smaller than the rest and a stiffness matrix to match. The minimum angle a
+mesher can deliver is in any case limited by the angles in the input: where the
+geometry itself has an 18 degree corner, no mesh will do better there.
+
+![a meshed excavation with its structures and supports](images/excavation_mesh.png)
+
+![a graded mesh over a cut slope](images/slope_mesh.png)
 
 ## Constitutive models
 
