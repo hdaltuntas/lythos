@@ -651,7 +651,6 @@ def build_model(drawing: DxfDrawing, rules: ImportRules | None = None,
                 soil_layers.append(SoilLayer(name=label, polygon=chain,
                                              material=MohrCoulomb(name=label)))
 
-    names = [layer.name for layer in soil_layers]
     stages, step_notes = _stages(soil_layers, excavated_at, structures, anchors, loads,
                                  rules)
     report.steps = step_notes
