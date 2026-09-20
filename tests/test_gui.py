@@ -94,3 +94,63 @@ def test_static_assets_exist():
     page = open(os.path.join(STATIC, "index.html"), encoding="utf-8").read()
     for element in ("btnRun", "btnMesh", "canvas", "exampleSelect", "stageList"):
         assert f'id="{element}"' in page
+
+
+def test_launcher_runs_without_installation():
+    """main.py must work from a clone with nothing installed."""
+    import os
+    import subprocess
+    import sys
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    launcher = os.path.join(root, "main.py")
+    assert os.path.isfile(launcher)
+
+    # An environment with no PYTHONPATH and a working directory elsewhere:
+    # the launcher has to find the package by itself.
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run([sys.executable, launcher, "--help"],
+                            capture_output=True, text=True, cwd="/", env=env, timeout=120)
+    assert result.returncode == 0, result.stderr
+    for command in ("run", "mesh", "gui", "examples"):
+        assert command in result.stdout
+
+
+def test_launcher_defaults_to_the_interface():
+    """Bare arguments belong to the interface, not to a missing command."""
+    import importlib.util
+    import os
+    import sys
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    spec = importlib.util.spec_from_file_location("lythos_launcher",
+                                                  os.path.join(root, "main.py"))
+    launcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launcher)
+
+    assert launcher.DEFAULT_COMMAND == "gui"
+    assert launcher.check_dependencies() == []
+
+    import lythos.cli                      # main.py imports this lazily
+
+    seen = {}
+    argv = sys.argv
+    real_main = lythos.cli.main
+
+    def fake_cli(args):
+        seen["args"] = args
+        return 0
+
+    lythos.cli.main = fake_cli
+    try:
+        for given, expected_first in (([], "gui"),
+                                      (["--port", "9000"], "gui"),
+                                      (["run", "m.json"], "run"),
+                                      (["mesh", "m.json"], "mesh")):
+            sys.argv = ["main.py"] + given
+            launcher.main()
+            assert seen["args"][0] == expected_first, (given, seen["args"])
+    finally:
+        sys.argv = argv
+        lythos.cli.main = real_main

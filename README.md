@@ -24,18 +24,40 @@ Lythos covers the analyses a geotechnical engineer runs in practice:
 Everything runs from an interactive interface in the browser, from the command
 line, or as a Python script.
 
-## Installing
+## Running it
+
+Nothing needs installing. From a fresh clone:
 
 ```bash
+python main.py
+```
+
+That opens the interface in your browser. `main.py` also takes the commands
+below, so `python main.py run models/slope.json -o out` works the same as the
+installed `lythos run ...`.
+
+Python 3.10 or later, with NumPy, SciPy and Matplotlib. If any of those are
+missing `main.py` says so and gives the command for your system rather than
+failing with an import error.
+
+Installing is optional and only buys you the shorter `lythos` command:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # fish: source .venv/bin/activate.fish
 pip install -e .
 ```
 
-Requires Python 3.10 or later, NumPy, SciPy and Matplotlib.
+A virtual environment is not a formality on Arch, Debian or Fedora: those
+distributions refuse a system-wide `pip install` outright (PEP 668). If you
+would rather use the system packages, `python -m venv --system-site-packages
+.venv` lets the environment see a pacman- or apt-installed NumPy instead of
+downloading its own.
 
 ## The interface
 
 ```bash
-lythos gui
+python main.py          # or: lythos gui
 ```
 
 This starts a local server and opens the interface in your browser.  Draw the
@@ -78,10 +100,13 @@ embedded, plus the numbers as JSON.
 ## From the command line
 
 ```bash
-lythos examples -o models        # write the worked examples as model files
-lythos mesh models/slope.json    # mesh statistics, without analysing
-lythos run models/slope.json -o out/slope
+python main.py examples -o models      # write the worked examples as model files
+python main.py mesh models/slope.json  # mesh statistics, without analysing
+python main.py run models/slope.json -o out/slope
 ```
+
+With the package installed, `lythos` replaces `python main.py` in each of
+these.
 
 ## Specifying a pile wall
 
