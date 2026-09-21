@@ -4,7 +4,7 @@
 deep excavations, with factors of safety by strength reduction and internal
 forces in walls, piles and anchors.
 
-![slope failure mechanism](docs/images/slope_strain.png)
+![slope failure mechanism](https://raw.githubusercontent.com/hdaltuntas/lythos/main/docs/images/slope_strain.png)
 
 Lythos covers the analyses a geotechnical engineer runs in practice:
 
@@ -26,7 +26,27 @@ Lythos covers the analyses a geotechnical engineer runs in practice:
 Everything runs from an interactive interface in the browser, from the command
 line, or as a Python script.
 
-## Running it
+## Installing
+
+```bash
+pip install lythosfea
+```
+
+The distribution is `lythosfea`; what you import and run is `lythos`:
+
+```python
+import lythos
+```
+
+```bash
+lythos gui                       # the interface
+lythos import --sample -o m.json # try the drawing that ships with it
+```
+
+Add `pip install lythosfea[dxf]` if you need binary DXF, splines or block
+references; plain ASCII DXF needs nothing extra.
+
+## Running it from a clone
 
 Nothing needs installing. From a fresh clone:
 
@@ -42,12 +62,12 @@ Python 3.10 or later, with NumPy, SciPy and Matplotlib. If any of those are
 missing `main.py` says so and gives the command for your system rather than
 failing with an import error.
 
-Installing is optional and only buys you the shorter `lythos` command:
+For working on the code, install it in place:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate        # fish: source .venv/bin/activate.fish
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 A virtual environment is not a formality on Arch, Debian or Fedora: those
@@ -66,7 +86,7 @@ This starts a local server and opens the interface in your browser.  Draw the
 soil layers, drop in a wall, set the construction stages, and press **Run
 analysis**.
 
-![the interface](docs/images/gui.png)
+![the interface](https://raw.githubusercontent.com/hdaltuntas/lythos/main/docs/images/gui.png)
 
 Nothing leaves your machine: the server listens on the loopback address only.
 The interface runs in a browser rather than a desktop toolkit so that it works
@@ -80,7 +100,7 @@ python main.py import section.dxf -o section.json --plot section.png
 
 Or press **Import DXF…** in the interface.
 
-![a section imported from a CAD drawing](docs/images/dxf_import.png)
+![a section imported from a CAD drawing](https://raw.githubusercontent.com/hdaltuntas/lythos/main/docs/images/dxf_import.png)
 
 Which drawing layer becomes what is decided by its name, matched
 case-insensitively and ignoring hyphens, underscores and spaces, so
@@ -125,7 +145,9 @@ only across the excavation enclose anything.
 Try it on the drawing in the repository:
 
 ```bash
-python main.py import examples/drawings/braced_excavation.dxf -o excavation.json
+lythos import --sample -o excavation.json
+# from a clone, without installing:
+python main.py import --sample -o excavation.json
 ```
 
 ```
@@ -142,7 +164,7 @@ factor of safety. Excavated regions are meshed like any other soil — they have
 to exist before they can be taken away — and each one leaves at its step and
 stays gone.
 
-![a staged excavation read from a drawing](docs/images/dxf_staged.png)
+![a staged excavation read from a drawing](https://raw.githubusercontent.com/hdaltuntas/lythos/main/docs/images/dxf_staged.png)
 
 Pass `--keep-coordinates` to leave survey coordinates alone, and see
 `ImportRules` for turning the step reading or the closing safety stage off.
@@ -215,7 +237,7 @@ The concrete modulus comes from EN 1992-1-1 (`Ecm = 22000 (fcm/10)^0.3` MPa).
 All structural output is per metre run of wall; divide by the spacing for the
 force in one pile.
 
-![axial force, shear and bending moment in the wall](docs/images/wall_forces.png)
+![axial force, shear and bending moment in the wall](https://raw.githubusercontent.com/hdaltuntas/lythos/main/docs/images/wall_forces.png)
 
 The steps in the shear diagram are at the anchor levels, where a point load
 enters the wall.

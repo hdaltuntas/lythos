@@ -25,7 +25,9 @@ def main(argv=None) -> int:
     mesh.add_argument("--mesh-size", type=float, default=None)
 
     bring = sub.add_parser("import", help="build a model from a DXF drawing")
-    bring.add_argument("drawing", help="path to a .dxf file")
+    bring.add_argument("drawing", nargs="?", help="path to a .dxf file")
+    bring.add_argument("--sample", action="store_true",
+                       help="use the braced excavation drawing shipped with the package")
     bring.add_argument("-o", "--out", default=None,
                        help="model file to write (default: alongside the drawing)")
     bring.add_argument("--scale", type=float, default=None,
@@ -81,11 +83,19 @@ def main(argv=None) -> int:
         from .core.serialize import save_model
         from .dxf import ImportRules, import_dxf
 
+        drawing = args.drawing
+        if args.sample and not drawing:
+            from .data import BRACED_EXCAVATION
+            drawing = BRACED_EXCAVATION
+        if not drawing:
+            print("give a .dxf file to import, or --sample to try the one "
+                  "shipped with the package", file=sys.stderr)
+            return 1
         rules = ImportRules(scale=args.scale, shift_to_origin=not args.keep_coordinates)
-        stem = os.path.splitext(os.path.basename(args.drawing))[0]
-        model, report = import_dxf(args.drawing, rules=rules, name=stem)
+        stem = os.path.splitext(os.path.basename(drawing))[0]
+        model, report = import_dxf(drawing, rules=rules, name=stem)
         print(report.describe())
-        out = args.out or os.path.splitext(args.drawing)[0] + ".json"
+        out = args.out or os.path.splitext(os.path.basename(drawing))[0] + ".json"
         save_model(model, out)
         print(f"\nmodel written to {out}")
         if args.plot:
