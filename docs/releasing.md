@@ -3,6 +3,18 @@
 The distribution is named `lythosfea`; the package you import and the command
 you type stay `lythos`.
 
+## Without a terminal
+
+`tools/upload_to_pypi.py` does all of the below from an editor: open it in
+Thonny (or IDLE, or VS Code), press Run, and answer the questions in the
+shell pane.  It builds its own environment for twine, so the system Python is
+left alone - on Arch, where pip refuses to install into it, that is the
+difference between working and not.  Set `TEST_PYPI = True` at the top of the
+file to rehearse.
+
+Nothing is sent before it has printed what it is about to upload and you have
+answered `yes`.
+
 ## Once, before the first upload
 
 Get an API token from <https://pypi.org/manage/account/token/>.  Until the
