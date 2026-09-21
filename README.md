@@ -208,6 +208,14 @@ print(summary["stages"][-1]["factor_of_safety"])      # 1.42 at this mesh size
 `run_and_report` writes a self-contained HTML report with every figure
 embedded, plus the numbers as JSON.
 
+Two ready-made scripts in `examples/` are written for an editor such as
+Thonny, IDLE or VS Code - open one and press Run:
+
+| script | what it does |
+| --- | --- |
+| `examples/thonny_analysis.py` | the whole analysis as plain Python: soil, geometry, stages, figures, report |
+| `examples/thonny_gui.py` | starts the interface and opens it in a browser |
+
 ## From the command line
 
 ```bash
