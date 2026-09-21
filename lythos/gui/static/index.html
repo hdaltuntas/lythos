@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lythos - 2D geotechnical finite element analysis</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Lythos <span>2D geotechnical finite element analysis</span></h1>
+  <div class="spacer"></div>
+  <select id="exampleSelect" title="Load a worked example"><option value="">Load example…</option></select>
+  <button id="btnDxf" title="Build a model from a CAD drawing">Import DXF…</button>
+  <button id="btnImport">Open…</button>
+  <button id="btnExport">Save</button>
+  <button id="btnMesh">Mesh</button>
+  <button id="btnRun" class="primary">Run analysis</button>
+  <input type="file" id="fileInput" accept=".json" hidden>
+  <input type="file" id="dxfInput" accept=".dxf" hidden>
+</header>
+
+<main>
+  <!-- ------------------------------------------------ left: tools and objects -->
+  <aside class="left">
+    <h2>Draw</h2>
+    <div class="tools">
+      <button data-tool="select" class="active">Select</button>
+      <button data-tool="layer">Soil layer</button>
+      <button data-tool="structure">Wall / piles</button>
+      <button data-tool="anchor">Anchor</button>
+      <button data-tool="load">Line load</button>
+      <button data-tool="water">Water table</button>
+    </div>
+    <div class="note" id="toolHint">Click to place points. Double-click or Enter to finish, Esc to cancel.</div>
+
+    <h2>Soil layers</h2>
+    <div class="tree" id="treeLayers"></div>
+    <h2>Structures</h2>
+    <div class="tree" id="treeStructures"></div>
+    <h2>Anchors &amp; loads</h2>
+    <div class="tree" id="treeOthers"></div>
+
+    <h2>Model</h2>
+    <div class="field"><label>Name</label><input id="modelName"></div>
+    <div class="grid2">
+      <div class="field"><label>Element size [m]</label><input id="meshSize" type="number" step="0.5"></div>
+      <div class="field"><label>Initial stresses</label>
+        <select id="initialStress"><option value="k0">K0 procedure</option><option value="gravity">Gravity loading</option></select>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Snap [m]</label><input id="snapStep" type="number" step="0.25" value="0.5"></div>
+      <div class="field"><label>Water &gamma;<sub>w</sub></label><input id="gammaWater" type="number" step="0.01" value="9.81"></div>
+    </div>
+  </aside>
+
+  <!-- --------------------------------------------------------- centre: canvas -->
+  <div id="canvasWrap">
+    <canvas id="canvas"></canvas>
+    <img id="bigPlot" alt="analysis result" hidden>
+    <div class="hint" id="hint">Drag to pan, scroll to zoom. Pick a drawing tool to begin, or load an example.</div>
+    <div class="coords" id="coords">—</div>
+  </div>
+
+  <!-- ------------------------------------------- right: properties and results -->
+  <aside class="right">
+    <div class="tabs">
+      <button id="tabProps" class="active">Properties</button>
+      <button id="tabStages">Stages</button>
+      <button id="tabResults">Results</button>
+    </div>
+
+    <div id="paneProps">
+      <div id="propsBody"><div class="note">Select an object on the canvas or in the list to edit its properties.</div></div>
+    </div>
+
+    <div id="paneStages" hidden>
+      <h2>Construction stages</h2>
+      <div id="stageList"></div>
+      <button id="btnAddStage">Add stage</button>
+      <div id="stageEditor"></div>
+    </div>
+
+    <div id="paneResults" hidden>
+      <div id="resultsBody" class="results"><div class="note">Run the analysis to see results.</div></div>
+    </div>
+  </aside>
+</main>
+
+<div id="statusBar">
+  <span class="msg" id="statusMsg">Ready.</span>
+  <div class="bar"><div id="progressBar"></div></div>
+  <span id="statusCount"></span>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
