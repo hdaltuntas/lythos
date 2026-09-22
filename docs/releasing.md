@@ -36,8 +36,11 @@ repository.
    and only once**, so anything wrong in the metadata - the author name, the
    licence, the README that becomes the project page - has to be fixed before
    the upload, not after.
-2. Run the tests: `pytest -q`.
-3. Build clean:
+2. Write the entry in `CHANGELOG.md`: the version, the date, and what
+   changed.  It is the same text the GitHub release carries, so writing it
+   here first means there is one place to copy it from.
+3. Run the tests: `pytest -q`.
+4. Build clean:
 
    ```bash
    rm -rf dist build
@@ -45,13 +48,13 @@ repository.
    twine check dist/*
    ```
 
-4. Upload:
+5. Upload:
 
    ```bash
    twine upload dist/*
    ```
 
-5. Check what was actually published, in an empty environment:
+6. Check what was actually published, in an empty environment:
 
    ```bash
    python -m venv /tmp/check
@@ -60,7 +63,15 @@ repository.
    /tmp/check/bin/lythos run /tmp/check-models/slope.json -o /tmp/check-out
    ```
 
-6. Tag it: `git tag v0.1.0 && git push --tags`.
+7. Tag it and write the release.  The tags carry no `v` prefix:
+
+   ```bash
+   git tag 0.1.0
+   git push origin 0.1.0
+   ```
+
+   Then, on GitHub, Releases > Draft a new release: choose that tag,
+   paste the changelog entry, and attach the two files from `dist/`.
 
 ## Rehearsing on TestPyPI
 

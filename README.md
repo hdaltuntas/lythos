@@ -311,6 +311,13 @@ Worth knowing before trusting a number to a design:
   displacement-versus-factor curve is reported alongside it and should be
   looked at.
 
+## Releases
+
+[`CHANGELOG.md`](CHANGELOG.md) says what changed in each version.  The
+built files are attached to every
+[release](https://github.com/hdaltuntas/lythos/releases), and
+`docs/releasing.md` is the checklist for making one.
+
 ## Licence
 
 MIT.
