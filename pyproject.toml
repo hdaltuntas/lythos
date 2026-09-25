@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "2D finite element analysis for geotechnical engineering: slopes, embankments and deep excavations, with factors of safety by strength reduction and internal forces in piles and walls."
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
+license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 authors = [{ name = "Hasan Deniz Altuntaş", email = "lythosfea@gmail.com" }]
 keywords = [

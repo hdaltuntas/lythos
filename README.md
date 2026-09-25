@@ -313,4 +313,13 @@ Worth knowing before trusting a number to a design:
 
 ## Licence
 
-MIT.
+Copyright © 2026 Hasan Deniz Altuntaş
+
+LythosFEA is free software: you can redistribute it and/or modify it under the terms of the
+[GNU Affero General Public License, version 3](LICENSE) as published by the Free Software
+Foundation. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+Whoever runs a modified version for users over a network must offer them the source of that
+version (section 13 of the licence). Versions published before this change were released
+under the MIT licence and remain available under it.
